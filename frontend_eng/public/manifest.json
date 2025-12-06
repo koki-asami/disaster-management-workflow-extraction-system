@@ -1,0 +1,8 @@
+{
+    "short_name": "Disaster Response Tool",
+    "name": "Disaster Response Flowchart Generator",
+    "start_url": ".",
+    "display": "standalone",
+    "theme_color": "#4a6fa5",
+    "background_color": "#f5f7fa"
+  }

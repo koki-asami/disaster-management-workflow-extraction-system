@@ -1,0 +1,113 @@
+.mermaid-chart {
+    position: relative;
+    width: 100%;
+    min-height: 100px;
+    margin-bottom: 1rem;
+  }
+  
+  .mermaid-container {
+    width: 100%;
+    overflow: auto;
+    padding: 1rem;
+    background-color: #fff;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+  
+  .mermaid-container.has-error {
+    opacity: 0.5;
+  }
+  
+  .mermaid-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.8);
+    z-index: 1;
+  }
+  
+  .mermaid-spinner {
+    border: 4px solid rgba(0, 0, 0, 0.1);
+    border-radius: 50%;
+    border-top: 4px solid #3498db;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin-bottom: 10px;
+  }
+  
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  
+  .mermaid-error {
+    padding: 15px;
+    margin-bottom: 15px;
+    color: #721c24;
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    text-align: center;
+  }
+  
+  .retry-button {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 10px;
+  }
+  
+  .retry-button:hover {
+    background-color: #c82333;
+  }
+  
+  /* Mermaid SVG スタイルのカスタマイズ */
+  .mermaid-container .node rect,
+  .mermaid-container .node circle,
+  .mermaid-container .node ellipse,
+  .mermaid-container .node polygon,
+  .mermaid-container .node path {
+    fill: #f5f7fa;
+    stroke: #4a6fa5;
+    stroke-width: 1px;
+  }
+  
+  .mermaid-container .edgePath .path {
+    stroke: #4a6fa5;
+    stroke-width: 1.5px;
+  }
+  
+  .mermaid-container .arrowheadPath {
+    fill: #4a6fa5;
+  }
+  
+  .mermaid-container .edgeLabel {
+    background-color: #ffffff;
+    padding: 2px 4px;
+    border-radius: 2px;
+    font-size: 0.95rem;
+  }
+  
+  .mermaid-container .cluster rect {
+    fill: #f7fafc;
+    stroke: #e2e8f0;
+    stroke-width: 1px;
+  }
+  
+  .mermaid-container .label {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 1.1rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-width: 320px; /* 長文でも折り返す */
+  }

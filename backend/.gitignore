@@ -1,0 +1,6 @@
+.chalice/deployments/
+.chalice/venv/
+.env
+logs/
+__pycache__/
+*.pyc

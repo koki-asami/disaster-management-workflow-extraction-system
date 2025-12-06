@@ -1,0 +1,309 @@
+/* チャートコンテナ全体のスタイル */
+.chart-container {
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* .chart-container h2 {
+  margin-bottom: 20px;
+  color: #333;
+  font-size: 24px;
+  text-align: center;
+} */
+
+/* タブシステムのスタイル */
+.tabs {
+  width: 100%;
+  margin-top: 0px;
+}
+
+.tab-list {
+  display: flex;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-bottom: 2px solid #e0e0e0;
+  
+}
+
+.tab-item {
+  padding: 12px 24px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-size: 16px;
+  color: #666;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.tab-item:hover {
+  color: #4285f4;
+}
+
+.tab-item.active {
+  color: #4285f4;
+  font-weight: 600;
+}
+
+.tab-item + .tab-item {
+  margin-left: 8px;
+}
+
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: #4285f4;
+}
+
+.tab-content {
+  padding: 20px;
+  background-color: #f8f9fa;
+}
+
+.tab-panel {
+  display: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.tab-panel.active {
+  display: block;
+  opacity: 1;
+}
+
+/* チャート表示エリアのスタイル */
+.chart-display {
+  width: 100%;
+  height: 1000px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  background-color: #fff;
+}
+
+/* Cytoscape 表示領域（CytoscapeChart側でも inline style を指定） */
+.cyto-display {
+  width: 100%;
+  height: 800px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background-color: #fff;
+}
+
+.chart-display svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* コードエディタのスタイル */
+.chart-editor {
+  display: flex;
+  flex-direction: column;
+  height: 800px;
+  background-color: #f8f9fa;
+}
+
+.mermaid-editor {
+  flex: 1;
+  padding: 15px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  resize: none;
+  background-color: #ffffff;
+}
+
+.mermaid-editor:focus {
+  outline: none;
+  border-color: #4285f4;
+  box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+}
+
+/* コントロールボタンのスタイル */
+.chart-controls {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.zoom-instructions {
+  color: #666;
+  font-size: 14px;
+  margin: 0;
+  text-align: center;
+  background-color: #f8f9fa;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid #f8f9fa;
+}
+
+.control-icon {
+  margin-right: 8px;
+  font-size: 16px;
+}
+
+.button-group {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin: 0;
+}
+
+.save-chart-button,
+.save-image-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  background-color: #4285f4;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  justify-content: center;
+}
+
+.save-chart-button:hover,
+.save-image-button:hover {
+  background-color: #3367d6;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.save-chart-button:disabled,
+.save-image-button:disabled {
+  background-color: #95a5a6;
+  color: #95a5a6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.save-chart-button:active,
+.save-image-button:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* エラーメッセージとローディング表示のスタイル */
+.chart-loading,
+.chart-retry-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #666;
+  background-color: rgba(255, 255, 255, 0.9);
+  padding: 20px;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.chart-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #dc3545;
+  background-color: #f8d7da;
+  padding: 20px;
+  border-radius: 4px;
+  border: 1px solid #f5c6cb;
+  max-width: 80%;
+}
+
+.chart-error h3 {
+  margin-bottom: 10px;
+  color: #721c24;
+}
+
+.chart-error p {
+  margin-bottom: 10px;
+  color: #721c24;
+}
+
+.chart-error pre {
+  background-color: #fff;
+  padding: 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  text-align: left;
+  font-size: 12px;
+}
+
+/* プレースホルダーのスタイル */
+.chart-placeholder {
+  width: 100%;
+  height: 600px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f8f9fa;
+  border: 2px dashed #e0e0e0;
+  border-radius: 4px;
+  color: #666;
+  font-size: 16px;
+  
+}
+
+/* エディタコントロールのスタイル */
+.editor-controls {
+  margin-top: 15px;
+  text-align: right;
+}
+
+.apply-button {
+  padding: 8px 16px;
+  background-color: #4285f4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s ease;
+}
+
+.apply-button:hover {
+  background-color: #3367d6;
+}
+
+.apply-button:disabled {
+  background-color: #95a5a6;
+  cursor: not-allowed;
+}
+
+/* Cytoscape表示エリアのスタイル */
+.cyto-display {
+  width: 100%;
+  height: 1000px;
+  min-height: 800px;
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-family: Arial, sans-serif;
+  font-size: 24px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}

@@ -501,7 +501,18 @@ export default function CytoscapeChart({ mermaidCode }) {
         gravityRange: 3.8,
         initialEnergyOnIncremental: 0.3
       },
-      wheelSensitivity: 0.2
+      wheelSensitivity: 0.5, // 感度を上げてトラックパッドでのズームをしやすくする
+      userZoomingEnabled: true,
+      zoomingEnabled: true,
+      userPanningEnabled: true,
+      panningEnabled: true,
+      boxSelectionEnabled: false,
+      selectionType: 'single',
+      touchTapThreshold: 8,
+      desktopTapThreshold: 4,
+      autolock: false,
+      autoungrabify: false,
+      autounselectify: false
     });
 
     cy.one('render', () => {
@@ -510,8 +521,42 @@ export default function CytoscapeChart({ mermaidCode }) {
       } catch (e) {}
     });
 
+    // トラックパッドでのズーム対応
+    const container = containerRef.current;
+    const handleWheel = (e) => {
+      // Macのトラックパッド等では、ピンチ操作はctrlKey+wheelとして検知されることが多い
+      // または、単純な2本指スクロールもwheelとして来る
+      // ここではブラウザのスクロールを防いでCytoscapeのズームを適用する
+      e.preventDefault();
+      
+      const zoom = cy.zoom();
+      const delta = e.deltaY;
+      
+      // 感度調整: 小さなdeltaでも反応するように
+      const sensitivity = 0.001;
+      const factor = 1 - delta * sensitivity;
+      
+      const newZoom = zoom * factor;
+      
+      // ズーム範囲制限
+      if (newZoom > 0.1 && newZoom < 10) {
+        cy.zoom({
+          level: newZoom,
+          renderedPosition: { x: e.offsetX, y: e.offsetY }
+        });
+      }
+    };
+
+    // コンテナに直接イベントリスナーを追加 (passive: false で preventDefault を有効化)
+    if (container) {
+      container.addEventListener('wheel', handleWheel, { passive: false });
+    }
+
     cyRef.current = cy;
     return () => {
+      if (container) {
+        container.removeEventListener('wheel', handleWheel);
+      }
       if (cyRef.current) {
         cyRef.current.destroy();
         cyRef.current = null;

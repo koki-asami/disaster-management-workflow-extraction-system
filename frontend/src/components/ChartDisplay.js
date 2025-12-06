@@ -209,7 +209,8 @@ function ChartDisplay({ chartCode, onRetryRequest, onCodeUpdate, savedChart, fil
           center: true,
           minZoom: 0.1,
           maxZoom: 10,
-          zoomScaleSensitivity: 0.3,
+          zoomScaleSensitivity: 0.5, // 感度調整
+          mouseWheelZoomEnabled: false, // デフォルトのホイールズームを無効化して自前で制御
           beforeZoom: () => {
             try {
               const ctm = svgElement.getCTM();
@@ -225,9 +226,42 @@ function ChartDisplay({ chartCode, onRetryRequest, onCodeUpdate, savedChart, fil
           }
         });
 
+        // カスタムホイールリスナーを追加
+        const handleWheel = (e) => {
+          e.preventDefault();
+          const zoom = panZoomInstance.getZoom();
+          const delta = e.deltaY;
+          const sensitivity = 0.001;
+          const factor = 1 - delta * sensitivity;
+          const newZoom = zoom * factor;
+          
+          if (newZoom > 0.1 && newZoom < 10) {
+            // マウス位置を中心にズーム
+            // svg-pan-zoomのpublic APIにはzoomAtPointがない場合があるため
+            // 単純なzoomまたはzoomAtPointByを使用
+            if (typeof panZoomInstance.zoomAtPointBy === 'function') {
+               panZoomInstance.zoomAtPointBy(factor, {x: e.clientX, y: e.clientY});
+            } else {
+               panZoomInstance.zoom(newZoom);
+            }
+          }
+        };
+        
+        svgElement.addEventListener('wheel', handleWheel, { passive: false });
+
         // インスタンスが正しく作成されたことを確認
         if (panZoomInstance && typeof panZoomInstance.resize === 'function') {
           panZoomRef.current = panZoomInstance;
+          
+          // クリーンアップ時にリスナーを削除するために参照を保持したいが
+          // 簡易的にpanZoomRef.current.destroy()でsvg-pan-zoomが管理するイベントは消える
+          // ただし自前で追加したsvgElementへのリスナーは残る可能性がある
+          // ここではcleanupRefで処理する
+          const originalCleanup = cleanupRef.current;
+          cleanupRef.current = () => {
+            svgElement.removeEventListener('wheel', handleWheel);
+            if (originalCleanup) originalCleanup();
+          };
           
           // 初期表示の調整
           requestAnimationFrame(() => {

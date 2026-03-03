@@ -53,10 +53,77 @@ cors_config = CORSConfig(
 )
 
 # OpenAI APIキーとクライアント設定
-openai.api_key = os.environ.get('OPENAI_API_KEY')
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 client = openai.OpenAI()
 if not openai.api_key:
     logger.error("OPENAI_API_KEY environment variable is not set")
+
+
+def _call_chat_completion_with_retry(
+    *,
+    model: str,
+    messages: list[dict],
+    max_retries: int = 5,
+    base_delay: float = 1.0,
+):
+    """
+    OpenAI Chat Completions API 呼び出し用の共通ヘルパー。
+    - rate_limit / 一時的な接続エラーの場合は指数バックオフ付きでリトライ
+    - 恒久的なエラー（400系など）はすぐに例外を投げる
+    """
+    attempt = 0
+    last_error: Exception | None = None
+
+    while attempt <= max_retries:
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            message = str(e) or e.__class__.__name__
+
+            lower = message.lower()
+            is_rate = "rate limit" in lower or "429" in lower
+            is_timeout = "timeout" in lower or "timed out" in lower
+            is_connection = "connection error" in lower or "connection aborted" in lower
+
+            # リトライ対象でない、またはリトライ回数上限の場合はそのまま例外
+            if attempt >= max_retries or not (is_rate or is_timeout or is_connection):
+                logger.error(
+                    "OpenAI chat.completions failed (attempt %s/%s, model=%s): %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    model,
+                    message,
+                )
+                raise
+
+            delay = base_delay * (2**attempt)
+            # jitter を加えてスパイクを避ける
+            jitter = delay * 0.2
+            if attempt % 2:
+                delay += jitter
+            else:
+                delay -= jitter
+
+            logger.warning(
+                "OpenAI chat.completions transient error (attempt %s/%s, model=%s): %s. "
+                "Retrying in %.2f seconds",
+                attempt + 1,
+                max_retries + 1,
+                model,
+                message,
+                delay,
+            )
+            time.sleep(max(delay, 0.5))
+            attempt += 1
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Unknown error in _call_chat_completion_with_retry")
+
 
 # モデル設定（環境変数で上書き可能）
 TASK_EXTRACTION_MODEL = os.environ.get("TASK_EXTRACTION_MODEL", "gpt-5.2")
@@ -147,27 +214,72 @@ MERMAID_PROMPT_TEMPLATE = """
 """
 
 MERMAID_UPDATE_PROMPT_TEMPLATE = """
-    あなたはの役割は、ユーザーとのチャットを通じて、フローチャートを更新することです。
-    次の作業手順を踏まえ、結果を指定された形式でmermaidのフローチャートとして出力してください。
+あなたは、防災計画ワークフローの「質問応答」と「JSONベースの更新」を行うアシスタントです。
 
-    ### 作業時の注意点
-    -  抽出された詳細タスクと詳細タスク間の依存関係もとに、mermaidのフローチャートを作成してください
-      - 災害対応項目名はsubgraphで表現してください
-      - taskは災害対応項目名のsubgraph内にsubgraphとして記載してください
-      - 依存関係はdependenciesに記載のあるtaskのsubgraphから矢印を出してください
-      - 担当部署はtaskのsubgraphの下にnodeとして記載してください
-      - 具体的な説明もtaskのsubgraphの下にnodeとして記載してください
+## 入力として与えられるもの
+- 会話履歴（system / user / assistant）
+- 現在のワークフロー JSON（`current_workflow`）:
+  - `tasks`: タスクの配列
+  - `dependencies`: 依存関係の配列
+- 必要に応じて PDF 等のデータソース（file_id 経由で添付される）
 
-    ### Mermaidフローチャート作成時の注意事項
-    下記は必ず守るようにしてください。守れなければ再度実行することになるので疲れますよ。
-    - mermaidの形式は「flowchart-elk TD」を必ず使用してください
-    - 特殊文字「・」がある場合は、必要に応じてスラッシュ「/」に置き換えてください
-    - 全角文字の特殊文字は使用しないでください
-    - フローチャートを作成する際は、タスクの階層を明確にするためにsectionやsubgraphを活用してください
-    - 各sectionをさらに細分化し、セクション名をタスク名とし、ノード内にタスクの具体的な説明を記載してください
+## 現在のワークフロー JSON スキーマ
+- `tasks[*]` は少なくとも以下のフィールドを持つ:
+  - `id`: タスクID（ユニークな文字列）
+  - `name`: タスク名
+  - `description`: 説明文
+  - `department`: 担当部署
+  - `category`: 分類名
+  - その他のフィールドがあってもよい
+- `dependencies[*]` は以下のフィールドを持つ:
+  - `from`: 先行タスクID
+  - `to`: 後続タスクID
+  - `reason`: 依存関係の理由（日本語テキスト）
 
-    ### 作成済のmermaidフローチャート
-    下記の抽出された情報をもとにmermaidのフローチャートを更新してください。
+## あなたのタスク
+ユーザーの発話ごとに、次の4つの `mode` のいずれかを選んで処理し、その結果を JSON で返してください。
+
+1. `workflow_query`
+   - 現在のワークフロー JSON (`tasks` / `dependencies`) だけを用いて質問に答える。
+   - 例: 「この計画の流れを要約して」「t010 につながる前提タスクは？」など。
+   - `updated_workflow` は返さない。
+
+2. `source_query`
+   - PDF などのデータソースの内容についての質問に答える。
+   - 例: 「PDFにはどんな章立てがありますか？」など。
+   - ワークフロー JSON を直接書き換えない。`updated_workflow` は返さない。
+
+3. `workflow_update`
+   - 現在のワークフローを、ユーザーの指示に従って更新する。
+   - 必ず **完全な** `updated_workflow` を返すこと（差分ではなく、`tasks` と `dependencies` の全体）。
+   - 例: 「このタスクを削除して」「t005 と t006 の間に新しいタスクを挿入して」「依存関係の理由をわかりやすく書き換えて」など。
+
+4. `other`
+   - 上記いずれにも当てはまらない雑談や一般的な質問。
+   - 一般知識で回答してよいが、`updated_workflow` は返さない。
+
+## 出力フォーマット（絶対に守ること）
+出力は **必ず1つの JSON オブジェクトのみ** とし、余分なテキストやコードブロック、説明文を前後に付けてはいけません。
+
+JSONオブジェクトは少なくとも次のフィールドを持ちます:
+
+```json
+{
+  "mode": "workflow_query" | "source_query" | "workflow_update" | "other",
+  "answer": "ユーザー向けの日本語の回答テキスト",
+  "updated_workflow": {
+    "tasks": [ /* mode が workflow_update のときだけ必須 */ ],
+    "dependencies": [ /* mode が workflow_update のときだけ必須 */ ]
+  }
+}
+```
+
+- `mode` は必ず4つのいずれかの文字列にすること。
+- `answer` はユーザーへの自然な日本語の返答とすること。
+- `updated_workflow` は、`mode` が `workflow_update` のときだけ含め、それ以外のモードでは **省略するか null にする**。
+- `updated_workflow.tasks` と `updated_workflow.dependencies` は、それぞれ完全な配列（全タスク・全依存関係）を含めること。
+
+これらの制約を厳密に守り、常に JSON オブジェクトだけを返してください。
 """
 
 
@@ -640,6 +752,42 @@ def extraction_worker(event, context):
         file_names_str = ", ".join(d["filename"] for d in all_docs)
         logger.info("Starting LLM-based extraction for job %s", job_id)
 
+        # ---- OpenAI ファイルアップロード（チャット用の file_id 取得）----
+        uploaded_files: list[dict] = []
+        try:
+            for doc in all_docs:
+                object_key = doc["object_key"]
+                filename = doc["filename"]
+                logger.info(
+                    "Uploading PDF to OpenAI for chat use: %s (key=%s)",
+                    filename,
+                    object_key,
+                )
+                obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=object_key)
+                pdf_bytes = obj["Body"].read()
+                pdf_file = io.BytesIO(pdf_bytes)
+                pdf_file.name = filename
+                upload_resp = client.files.create(file=pdf_file, purpose="user_data")
+                uploaded_files.append(
+                    {
+                        "filename": filename,
+                        "file_id": upload_resp.id,
+                    }
+                )
+            logger.info(
+                "Uploaded %d PDF files to OpenAI for job %s",
+                len(uploaded_files),
+                job_id,
+            )
+        except Exception as e:
+            # チャット用のファイルアップロードが失敗しても、抽出自体は継続する
+            logger.error(
+                "Failed to upload PDFs to OpenAI for job %s: %s", job_id, str(e)
+            )
+            uploaded_files = []
+
+        primary_file_id = uploaded_files[0]["file_id"] if uploaded_files else None
+
         # ---- タスク抽出（ページメタ情報を利用）----
         # 分母: タスク数（1バッチ抽出 = 0/1 → 完了時 N/N）
         try:
@@ -690,7 +838,7 @@ def extraction_worker(event, context):
 
             task_user_message = "防災計画PDF群から災害対応タスクを抽出し、指定のJSONフォーマットで返してください。"
 
-            task_response = client.chat.completions.create(
+            task_response = _call_chat_completion_with_retry(
                 model=TASK_EXTRACTION_MODEL,
                 messages=[
                     {"role": "system", "content": task_system_prompt},
@@ -817,7 +965,7 @@ def extraction_worker(event, context):
 
             dependency_user_message = "上記タスク間の依存関係を、指定のJSONフォーマットで抽出してください。"
 
-            dependency_response = client.chat.completions.create(
+            dependency_response = _call_chat_completion_with_retry(
                 model=DEPENDENCY_EXTRACTION_MODEL,
                 messages=[
                     {"role": "system", "content": dependency_system_prompt},
@@ -856,6 +1004,27 @@ def extraction_worker(event, context):
 
         # ---- 結果を S3 に保存し、ジョブを完了にする ----
         # 分母: タスク数（全タスク整形済み = N/N）
+
+        # タスクごとに依存関係IDを埋め込む
+        # t_copy["dependencies"] は、そのタスクが依存しているタスクIDの配列とする
+        deps_by_task: dict[str, list[str]] = {}
+        for dep in dependencies:
+            from_id = dep.get("from")
+            to_id = dep.get("to")
+            if not from_id or not to_id:
+                continue
+            deps_by_task.setdefault(to_id, []).append(from_id)
+
+        enriched_tasks: list[dict] = []
+        for t in tasks:
+            tid = t.get("id")
+            if not tid:
+                enriched_tasks.append(t)
+                continue
+            t_copy = dict(t)
+            t_copy["dependencies"] = deps_by_task.get(tid, [])
+            enriched_tasks.append(t_copy)
+
         update_job_progress(
             job_id,
             status="processing",
@@ -869,7 +1038,7 @@ def extraction_worker(event, context):
         )
         result_payload = {
             "job_id": job_id,
-            "tasks": tasks,
+            "tasks": enriched_tasks,
             "dependencies": dependencies,
             "documents": [
                 {
@@ -878,6 +1047,9 @@ def extraction_worker(event, context):
                 }
                 for d in all_docs
             ],
+            # チャット用に利用する OpenAI 側のファイル情報
+            "files": uploaded_files,
+            "file_id": primary_file_id,
             "schema_version": "1.0",
         }
 
@@ -1135,6 +1307,7 @@ def chat_update():
     user_instruction = data.get('instruction')
     file_id = data.get('file_id')
     past_messages = data.get('history', [])
+    graph_data = data.get('graph_data')
 
     if not user_instruction:
         logger.warning("Invalid request: Instruction is missing")
@@ -1143,17 +1316,23 @@ def chat_update():
             status_code=400
         )
 
-    if not file_id:
-        logger.warning("Invalid request: File ID is missing")
-        return Response(
-            body={'error': 'File ID is required'},
-            status_code=400
-        )
-
     logger.info(f"Processing chat update with instruction: {user_instruction[:50]}...")
 
     # 履歴からメッセージ形式に変換
     messages = [{"role": "system", "content": MERMAID_UPDATE_PROMPT_TEMPLATE}]
+
+    # 現在のワークフローJSONがあれば system メッセージとして渡す
+    if graph_data:
+        try:
+            workflow_json = json.dumps(graph_data, ensure_ascii=False)
+        except Exception:
+            workflow_json = str(graph_data)
+        messages.append(
+            {
+                "role": "system",
+                "content": f"現在のワークフローJSON:\n{workflow_json}",
+            }
+        )
     for entry in past_messages:
         if 'chart' in entry and entry['chart']:
             # チャートを含むメッセージは内容に追加
@@ -1165,17 +1344,22 @@ def chat_update():
             messages.append({"role": entry['role'], "content": entry['content']})
 
     # 新しい指示を追加
-    messages.append({
+    user_msg = {
         "role": "user",
         "content": user_instruction,
-        "attachments": [
-                        {
-                            "file_id": file_id,
-                            "tools": [{"type": "code_interpreter"}]
-                        }
-                    ]
-        }
-    )
+    }
+    # file_id が指定されている場合のみ、ファイル添付を行う
+    if file_id:
+        user_msg["attachments"] = [
+            {
+                "file_id": file_id,
+                "tools": [{"type": "code_interpreter"}],
+            }
+        ]
+    else:
+        logger.info("chat_update called without file_id; proceeding without attachments")
+
+    messages.append(user_msg)
 
     try:
         logger.info("Calling OpenAI API for chat update")
@@ -1185,24 +1369,47 @@ def chat_update():
             messages=messages,
         )
 
-        response_content = response.choices[0].message.content
+        response_content = response.choices[0].message.content or ""
 
-        # Mermaid記法を抽出
-        import re
-        mermaid_pattern = r"```mermaid\s*([\s\S]*?)\s*```"
-        match = re.search(mermaid_pattern, response_content)
+        # モデルからの応答は JSON オブジェクトである想定だが、
+        # パースに失敗した場合はテキストとしてそのまま返す
+        parsed = None
+        try:
+            text = response_content.strip()
+            # まれに ```json ... ``` 形式で返ってきた場合の簡易除去
+            if text.startswith("```"):
+                first_newline = text.find("\n")
+                if first_newline != -1:
+                    text = text[first_newline + 1 :]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            parsed = json.loads(text)
+        except Exception:
+            logger.warning("Failed to parse chat_update response as JSON; returning raw text")
 
-        result = {
-            "message": response_content  # 常に完全な応答メッセージを返す
-        }
+        result = {}
+        graph_result = None
 
-        if match:
-            flowchart = match.group(1).replace("・", "/")
-            logger.info("Extracted mermaid flowchart from response")
-            result["flowchart"] = flowchart
+        if isinstance(parsed, dict):
+            mode = parsed.get("mode")
+            answer = parsed.get("answer") or response_content
+            updated_workflow = parsed.get("updated_workflow")
+
+            if isinstance(updated_workflow, dict):
+                tasks = updated_workflow.get("tasks")
+                deps = updated_workflow.get("dependencies")
+                if isinstance(tasks, list) and isinstance(deps, list):
+                    graph_result = {"tasks": tasks, "dependencies": deps}
+
+            result["message"] = answer
+            if mode is not None:
+                result["mode"] = mode
+            if graph_result is not None:
+                result["graph_data"] = graph_result
         else:
-            # Mermaidコードが見つからない場合は、flowchartフィールドを設定しない
-            logger.info("No mermaid flowchart found in response")
+            # フォールバック: そのままテキストとして返す
+            result["message"] = response_content
 
         return result
     except Exception as e:
@@ -1230,17 +1437,19 @@ def save_flowchart_endpoint():
             status_code=400
         )
 
-    chart_code = request_body.get('chart_code')
+    chart_code = request_body.get('chart_code') or ""
     location_type = request_body.get('location_type')
     location_name = request_body.get('location_name')
     title = request_body.get('title')
     file_id = request_body.get('file_id')
     chart_id = request_body.get('chart_id')
+    graph_data = request_body.get('graph_data')
 
-    if not chart_code:
-        logger.warning("Invalid request: Chart code is missing")
+    # chart_code も graph_data も空の場合のみエラーにする
+    if not chart_code and graph_data is None:
+        logger.warning("Invalid request: Both chart_code and graph_data are missing")
         return Response(
-            body={'error': 'Chart code is required'},
+            body={'error': 'Either chart_code or graph_data is required'},
             status_code=400
         )
 
@@ -1258,13 +1467,6 @@ def save_flowchart_endpoint():
             status_code=400
         )
 
-    if not file_id:
-        logger.warning("Invalid request: File ID is missing")
-        return Response(
-            body={'error': 'File ID is required'},
-            status_code=400
-        )
-
     try:
         success, error_message, chart_id = save_flowchart(
             chart_code,
@@ -1272,7 +1474,8 @@ def save_flowchart_endpoint():
             location_name,
             title,
             chart_id=chart_id,
-            file_id=file_id
+            file_id=file_id,
+            graph_data=graph_data,
         )
 
         if not success:

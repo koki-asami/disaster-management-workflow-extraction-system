@@ -83,15 +83,17 @@ def get_table():
     )
 
 
-def save_flowchart(chart_code, location_type, location_name, title=None, chart_id=None, file_id=None):
+def save_flowchart(chart_code, location_type, location_name, title=None, chart_id=None, file_id=None, graph_data=None):
     """Save a flowchart to the database, or update if chart_id is provided"""
     try:
         table = get_table()
+        # DynamoDB には空文字列は保存できないため、None の場合は空文字に統一して扱う
+        chart_code = chart_code or ""
         pdf_object_key = None
         chart_object_key = None
 
         # Check if chart_code is too large for DynamoDB (400KB)
-        if len(chart_code) > 400 * 1024:
+        if chart_code and len(chart_code) > 400 * 1024:
             try:
                 # Upload chart code to S3
                 chart_object_key = upload_chart_code(chart_code, location_name)
@@ -132,26 +134,42 @@ def save_flowchart(chart_code, location_type, location_name, title=None, chart_i
             item['pdf_object_key'] = pdf_object_key
         if chart_object_key:
             item['chart_object_key'] = chart_object_key
+        if graph_data is not None:
+            # tasks / dependencies などのJSONそのものを保存（400KB制限は chart_code のみを対象）
+            item['graph_data'] = graph_data
 
         if chart_id:
             # Update existing flowchart
             try:
+                update_expr = (
+                    'SET location_type = :lt, location_name = :ln, chart_code = :cc, '
+                    'updated_at = :ua, file_id = :fid'
+                )
+                if title:
+                    update_expr += ', title = :t'
+                if pdf_object_key:
+                    update_expr += ', pdf_object_key = :pok'
+                if chart_object_key:
+                    update_expr += ', chart_object_key = :cok'
+                if graph_data is not None:
+                    update_expr += ', graph_data = :gd'
+
+                expr_values = {
+                    ':lt': location_type,
+                    ':ln': location_name,
+                    ':cc': chart_code,
+                    ':ua': datetime.now().isoformat(),
+                    ':fid': file_id,
+                    **({':t': title} if title else {}),
+                    **({':pok': pdf_object_key} if pdf_object_key else {}),
+                    **({':cok': chart_object_key} if chart_object_key else {}),
+                    **({':gd': graph_data} if graph_data is not None else {}),
+                }
+
                 response = table.update_item(
                     Key={'id': chart_id},
-                    UpdateExpression='SET location_type = :lt, location_name = :ln, chart_code = :cc, updated_at = :ua, file_id = :fid' + 
-                                    (', title = :t' if title else '') +
-                                    (', pdf_object_key = :pok' if pdf_object_key else '') +
-                                    (', chart_object_key = :cok' if chart_object_key else ''),
-                    ExpressionAttributeValues={
-                        ':lt': location_type,
-                        ':ln': location_name,
-                        ':cc': chart_code,
-                        ':ua': datetime.now().isoformat(),
-                        ':fid': file_id,
-                        **({':t': title} if title else {}),
-                        **({':pok': pdf_object_key} if pdf_object_key else {}),
-                        **({':cok': chart_object_key} if chart_object_key else {})
-                    },
+                    UpdateExpression=update_expr,
+                    ExpressionAttributeValues=expr_values,
                     ReturnValues='ALL_NEW'
                 )
                 logger.info(f"Flowchart {chart_id} updated successfully")

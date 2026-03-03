@@ -96,8 +96,8 @@ const SavedFlowcharts = ({ onSelectFlowchart }) => {
   });
 
   return (
-    <Container className="py-4">
-      <h2 className="mb-4">保存済みフローチャート</h2>
+    <Container className="py-4 saved-flowcharts-container">
+      <h2 className="saved-flowcharts-title">保存済みフローチャート</h2>
       
       <Row className="mb-4">
         <Col md={8}>
@@ -137,7 +137,7 @@ const SavedFlowcharts = ({ onSelectFlowchart }) => {
           <div className="alert alert-danger">{error}</div>
         ) : filteredFlowcharts.length === 0 ? (
           <div className="flowchart-info">
-            <p className="mb-0">保存されたフローチャートがありません。</p>
+            <p className="mb-0">まだフローチャートは保存されていません。</p>
           </div>
         ) : (
           <Row>

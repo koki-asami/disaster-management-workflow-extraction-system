@@ -6,6 +6,15 @@ import fcose from 'cytoscape-fcose';
 cytoscape.use(dagre);
 cytoscape.use(fcose);
 
+// 画面幅に応じてフォントやノードサイズをスケールさせる簡易ヘルパー
+function getScale() {
+  if (typeof window === 'undefined') return 1;
+  const baseWidth = 1440;
+  const w = window.innerWidth || baseWidth;
+  const raw = w / baseWidth;
+  return Math.min(Math.max(raw, 0.7), 1.2);
+}
+
 // カテゴリの色を自動生成する関数
 function generateCategoryColors(categories) {
   const colors = {};
@@ -72,7 +81,20 @@ function toPastelColor(hexColor) {
   return `#${toHex(pr)}${toHex(pg)}${toHex(pb)}`;
 }
 
-function getLayoutOptions() {
+function getLayoutOptions(useDagreLayout = false) {
+  if (useDagreLayout) {
+    return {
+      name: 'dagre',
+      rankDir: 'TB',
+      nodeSep: 80,
+      rankSep: 120,
+      edgeSep: 20,
+      ranker: 'tight-tree',
+      fit: true,
+      padding: 80,
+    };
+  }
+
   return {
     name: 'fcose',
     quality: 'proof',
@@ -392,7 +414,7 @@ function parseMermaidToElements(mermaidCode) {
   // 2. タスクコンテナノード (2階層目)
   compoundNodes.forEach((node) => {
     const parent = node.category;
-    const color = parent ? categoryColors[parent] : '#4a6fa5';
+    const color = parent ? categoryColors[parent] : '#00205B';
     elements.push({
       group: 'nodes',
       data: {
@@ -413,7 +435,7 @@ function parseMermaidToElements(mermaidCode) {
     if (!parent || !compoundNodes.has(parent)) return;
 
     const category = task.category;
-    const color = category ? categoryColors[category] : '#4a6fa5';
+    const color = category ? categoryColors[category] : '#00205B';
     
     elements.push({
       group: 'nodes',
@@ -434,7 +456,7 @@ function parseMermaidToElements(mermaidCode) {
   return { elements, categories, categoryColors };
 }
 
-export default function CytoscapeChart({ mermaidCode, graphData }) {
+export default function CytoscapeChart({ mermaidCode, graphData, useDagreLayout = false }) {
   const containerRef = useRef(null);
   const cyRef = useRef(null);
   const [hoveredEdgeInfo, setHoveredEdgeInfo] = useState(null);
@@ -463,6 +485,8 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
       cyRef.current = null;
     }
 
+    const scale = getScale();
+
     const cy = cytoscape({
       container: containerRef.current,
       elements,
@@ -480,36 +504,36 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
           style: {
             'background-color': '#f8f9fa',
             'border-color': function(ele) {
-              return ele.data('color') || '#4a6fa5';
+              return ele.data('color') || '#00205B';
             },
-            'border-width': 8,
+            'border-width': 4 * scale,
             'text-valign': 'top',
             'text-halign': 'center',
             'font-weight': 'bold',
-            'font-size': '48px',
-            'padding': '60px'
+            'font-size': 36 * scale,
+            'padding': 28 * scale
           }
         },
         {
           selector: 'node.task-container',
           style: {
             'background-color': function(ele) {
-              const color = ele.data('color') || '#4a6fa5';
+              const color = ele.data('color') || '#00205B';
               return toPastelColor(color);
             },
             'border-color': function(ele) {
-              return ele.data('color') || '#4a6fa5';
+              return ele.data('color') || '#00205B';
             },
-            'border-width': 4,
+            'border-width': 2 * scale,
             'label': 'data(label)',
             'text-valign': 'top',
             'text-halign': 'center',
-            'font-size': '48px',
+            'font-size': 26 * scale,
             'font-weight': 'bold',
-            'padding': '15px',   // パディング縮小
-            'min-width': '500px', // 最小幅も少し縮小
-            'min-height': '120px', // 最小高さも少し縮小
-            'text-margin-y': -15
+            'padding': 10 * scale,
+            'min-width': 240 * scale,
+            'min-height': 70 * scale,
+            'text-margin-y': -8 * scale
           }
         },
         {
@@ -517,16 +541,16 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
           style: {
             'background-color': '#f8f9fa',
             'border-color': function(ele) {
-              return ele.data('color') || '#4a6fa5';
+              return ele.data('color') || '#00205B';
             },
-            'border-width': 8,
+            'border-width': 4 * scale,
             'label': 'data(label)',
             'text-valign': 'top',
             'text-halign': 'center',
             'font-weight': 'bold',
-            'font-size': '80px',
-            'padding': '20px', // パディング縮小
-            'text-margin-y': -30
+            'font-size': 30 * scale,
+            'padding': 20 * scale,
+            'text-margin-y': -16 * scale
           }
         },
         {
@@ -539,22 +563,22 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
             'text-valign': 'center',
             'text-halign': 'center',
             'text-wrap': 'wrap',
-            'text-max-width': '1400px', // 折り返し幅さらに拡大
-            'font-size': '48px', // フォントサイズさらに拡大
+            'text-max-width': 600 * scale,
+            'font-size': 20 * scale,
             'color': '#333333',
             'text-outline-width': 0,
             'text-background-opacity': 0,
             'shape': 'rectangle',
             'width': 'label',
             'height': 'label',
-            'padding': '25px'
+            'padding': 16 * scale
           }
         },
         {
           selector: 'node.description',
           style: {
             'font-weight': 'normal',
-            'font-size': '48px',
+            'font-size': 18 * scale,
             'line-height': 1.4
           }
         },
@@ -562,26 +586,29 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
           selector: 'node.department',
           style: {
             'font-weight': 'bold',
-            'font-size': '40px',
+            'font-size': 16 * scale,
             'color': '#555555'
           }
         },
         {
           selector: 'edge',
           style: {
-            'width': 16, // エッジを太く
+            'width': 6 * scale,
             'line-color': function(ele) {
               const sourceNode = ele.source();
-              return sourceNode.data('color') || '#4a6fa5';
+              return sourceNode.data('color') || '#00205B';
             },
             'target-arrow-color': function(ele) {
               const sourceNode = ele.source();
-              return sourceNode.data('color') || '#4a6fa5';
+              return sourceNode.data('color') || '#00205B';
             },
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'arrow-scale': 2, // 矢印サイズ拡大
-            'line-cap': 'round'
+            'curve-style': 'unbundled-bezier',
+            'edge-distances': 'node-position',
+            'control-point-step-size': 40 * scale,
+            'arrow-scale': 1.4 * scale,
+            'line-cap': 'round',
+            'line-join': 'round'
           }
         },
         {
@@ -589,44 +616,44 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
           style: {
             'background-color': '#f8f9fa',
             'border-color': function(ele) {
-              return ele.data('color') || '#4a6fa5';
+              return ele.data('color') || '#00205B';
             },
-            'border-width': 8,
+            'border-width': 6 * scale,
             'text-valign': 'top',
             'text-halign': 'center',
-            'text-max-width': '2000px',
-            'width': '2000px',
+            'text-max-width': 1200 * scale,
+            'width': 1200 * scale,
             'font-weight': 'bold',
-            'font-size': '48px',
-            'padding': '80px',
-            'text-margin-y': 20,
+            'font-size': 24 * scale,
+            'padding': 40 * scale,
+            'text-margin-y': 12 * scale,
             'text-background-color': '#ffffff',
             'text-background-opacity': 1,
-            'text-background-padding': '30px',
+            'text-background-padding': 16 * scale,
             'text-border-color': function(ele) {
-              return ele.data('color') || '#4a6fa5';
+              return ele.data('color') || '#00205B';
             },
-            'text-border-width': 2,
+            'text-border-width': 2 * scale,
             'text-border-opacity': 1,
             'text-outline-width': 0,
             'text-outline-color': 'transparent',
             'text-transform': 'none',
             'font-family': 'Arial, sans-serif',
             'font-style': 'normal',
-            'text-margin-x': 30
+            'text-margin-x': 16 * scale
           }
         },
         {
           selector: ':selected',
           style: {
             'border-width': 4,
-            'border-color': '#1e88e5',
-            'line-color': '#1e88e5',
-            'target-arrow-color': '#1e88e5'
+            'border-color': '#2563EB',
+            'line-color': '#2563EB',
+            'target-arrow-color': '#2563EB'
           }
         }
       ],
-      layout: getLayoutOptions(),
+      layout: getLayoutOptions(useDagreLayout),
       wheelSensitivity: 0.5, // 感度を上げてトラックパッドでのズームをしやすくする
       userZoomingEnabled: true,
       zoomingEnabled: true,
@@ -721,12 +748,12 @@ export default function CytoscapeChart({ mermaidCode, graphData }) {
       ref={containerRef}
       style={{ 
         width: '100%', 
-        height: '1000px', 
+        height: '70vh', 
         background: '#fff', 
         border: '1px solid #e0e0e0', 
         borderRadius: 4,
         fontFamily: 'Arial, sans-serif',
-        fontSize: '30px',
+        fontSize: '1rem',
         WebkitFontSmoothing: 'antialiased',
         MozOsxFontSmoothing: 'grayscale'
       }}

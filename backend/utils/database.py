@@ -420,12 +420,20 @@ def update_job_progress(
     processed_pages: int | None = None,
     total_pages: int | None = None,
     status: str | None = None,
+    phase: str | None = None,
+    detail: str | None = None,
+    progress: int | None = None,
+    phase_current: int | None = None,
+    phase_total: int | None = None,
+    phase_unit: str | None = None,
 ) -> dict | None:
     """
     Update an extraction job's progress.
 
-    - processed_pages / total_pages が与えられた場合は progress(0-100) も自動更新。
+    - progress が与えられた場合は progress(0-100) を明示的に更新（最優先）。
+    - processed_pages / total_pages が与えられた場合は progress(0-100) も自動更新（progress 未指定時）。
     - status が与えられた場合はステータスも更新。
+    - phase/detail が与えられた場合は処理フェーズの表示用に保存。
     """
     table = get_jobs_table()
 
@@ -443,15 +451,34 @@ def update_job_progress(
     if status is not None:
         expr_parts.append("#st = :s")
         values[":s"] = status
+    if phase is not None:
+        expr_parts.append("phase = :ph")
+        values[":ph"] = phase
+    if detail is not None:
+        expr_parts.append("detail = :dt")
+        values[":dt"] = detail
+    if phase_current is not None:
+        expr_parts.append("phase_current = :pc")
+        values[":pc"] = int(phase_current)
+    if phase_total is not None:
+        expr_parts.append("phase_total = :pt")
+        values[":pt"] = int(phase_total)
+    if phase_unit is not None:
+        expr_parts.append("phase_unit = :pu")
+        values[":pu"] = str(phase_unit)
 
-    # 進捗率の計算（processed / total）
-    if processed_pages is not None and total_pages:
-        try:
-            progress = int(max(0, min(100, (processed_pages / total_pages) * 100)))
-        except ZeroDivisionError:
-            progress = 0
+    # 進捗率の更新
+    if progress is not None:
         expr_parts.append("progress = :pr")
-        values[":pr"] = progress
+        values[":pr"] = int(max(0, min(100, progress)))
+    elif processed_pages is not None and total_pages:
+        # 進捗率の計算（processed / total）
+        try:
+            computed = int(max(0, min(100, (processed_pages / total_pages) * 100)))
+        except ZeroDivisionError:
+            computed = 0
+        expr_parts.append("progress = :pr")
+        values[":pr"] = computed
 
     update_expr = "SET " + ", ".join(expr_parts)
     names = {"#st": "status"} if status is not None else None
@@ -523,10 +550,10 @@ def save_job_result(
 
 
 def get_job(job_id: str) -> dict | None:
-    """Fetch a single extraction job record."""
+    """Fetch a single extraction job record. Uses ConsistentRead for latest progress."""
     table = get_jobs_table()
     try:
-        resp = table.get_item(Key={"job_id": job_id})
+        resp = table.get_item(Key={"job_id": job_id}, ConsistentRead=True)
         return resp.get("Item")
     except Exception as e:
         logger.error("Error getting extraction job %s: %s", job_id, str(e))

@@ -44,3 +44,12 @@ $ uv run chalice local --port 8081 --no-autoreload
 したがって、**現在の `chalice local` 実行では、同期版 `/analyze_pdf` エンドポイントは動作しますが、SQS 経由の非同期ジョブは AWS インフラの構築が完了するまで実運用できません。**
 
 本番利用時は、別途 IaC（CloudFormation / CDK / Terraform など）や AWS コンソールを用いて、上記リソースを作成・紐づける必要があります。
+
+### ローカル開発時の挙動（SQS なしで動かす）
+
+`POST /extractions` は **実行環境を自動判定**します。
+
+- `chalice local`（ローカル）では **SQS に enqueue せず**、同一プロセス内で `extraction_worker` をバックグラウンド実行します（レスポンスは `202`）。
+- AWS Lambda（本番）では **SQS に enqueue** します（`EXTRACTION_QUEUE_URL` が必須）。
+
+その場合でも `GET /extractions/{job_id}` のポーリングで進捗を追跡できます。

@@ -49,7 +49,7 @@ const DeleteConfirmModal = ({ show, handleClose, flowchart, onDeleteSuccess }) =
         )}
         
         <Alert variant="warning">
-          <strong>注意:</strong> この操作は取り消せません。削除したフローチャートは復元できません。
+          <strong>注意:</strong> この操作は取り消せません。削除したフローチャートは復元できないため、ご注意ください。
         </Alert>
       </Modal.Body>
       <Modal.Footer>

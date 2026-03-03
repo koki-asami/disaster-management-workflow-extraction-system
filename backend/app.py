@@ -12,6 +12,7 @@ from pathlib import Path
 
 import boto3
 import fitz  # PyMuPDF
+import threading
 
 from utils.database import (
     save_flowchart,
@@ -66,6 +67,56 @@ CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-5.2")
 sqs_client = boto3.client("sqs")
 s3_client = boto3.client("s3")
 EXTRACTION_QUEUE_URL = os.environ.get("EXTRACTION_QUEUE_URL")
+
+
+def _is_running_in_lambda() -> bool:
+    """
+    実行環境が AWS Lambda かどうかを推定する。
+    - chalice local: 通常これらの環境変数は設定されない
+    - Lambda: AWS_LAMBDA_FUNCTION_NAME / AWS_EXECUTION_ENV 等が設定される
+    """
+    aws_exec_env = os.environ.get("AWS_EXECUTION_ENV", "")
+    if aws_exec_env.startswith("AWS_Lambda_"):
+        return True
+
+    fn = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    task_root = os.environ.get("LAMBDA_TASK_ROOT", "")
+    # Lambda では通常 /var/task を指す。ローカル環境で誤って変数が入っていても
+    # /var/task にならない限り Lambda とみなさない。
+    if fn and task_root.startswith("/var/task"):
+        return True
+
+    return False
+
+
+def _invoke_worker_locally(job_id: str, uploads_payload: list[dict]) -> None:
+    """
+    ローカル開発向けフォールバック:
+    SQS が未設定の場合に、同一プロセス内で extraction_worker をバックグラウンド実行する。
+    """
+    try:
+        extraction_worker(
+            {
+                "Records": [
+                    {
+                        "body": json.dumps(
+                            {
+                                "job_id": job_id,
+                                "uploads": uploads_payload,
+                            }
+                        )
+                    }
+                ]
+            },
+            context=None,
+        )
+    except Exception as e:
+        logger.error("Local worker execution failed for job %s: %s", job_id, str(e))
+        try:
+            update_job_progress(job_id, status="failed")
+        except Exception:
+            # 最後の手段として握りつぶす（ローカルフォールバックのため）
+            pass
 
 # proxies設定を削除
 # 以前のバージョンのOpenAIライブラリでは必要なかった可能性があります
@@ -269,6 +320,170 @@ def delete_upload_endpoint(upload_id):
         )
 
 
+@app.route("/extractions", methods=["POST"], cors=cors_config)
+def create_extraction_job_endpoint():
+    """
+    アップロード済みPDF群から抽出ジョブを作成し、SQS に投入する。
+
+    期待するリクエストボディ:
+    {
+      "upload_ids": ["...", "..."]
+    }
+    """
+    body = app.current_request.json_body or {}
+    upload_ids = body.get("upload_ids") or []
+
+    if not isinstance(upload_ids, list) or not upload_ids:
+        return Response(
+            body={"error": "upload_ids must be a non-empty array"},
+            status_code=400,
+        )
+
+    # 対象アップロードのメタ情報を取得
+    uploads_payload: list[dict] = []
+    for upload_id in upload_ids:
+        item = get_upload(upload_id)
+        if not item:
+            return Response(
+                body={"error": f"Upload not found: {upload_id}"},
+                status_code=404,
+            )
+        uploads_payload.append(
+            {
+                "upload_id": item["upload_id"],
+                "object_key": item["object_key"],
+                "filename": item.get("filename") or item["object_key"],
+            }
+        )
+
+    # ジョブを作成
+    job_item = create_job(uploads=uploads_payload, status="queued")
+    job_id = job_item["job_id"]
+    update_job_progress(job_id, status="queued", phase="queued", detail="ジョブを作成しました")
+
+    logger.info(
+        "Runtime detection for /extractions: is_lambda=%s, AWS_EXECUTION_ENV=%s, AWS_LAMBDA_FUNCTION_NAME=%s, LAMBDA_TASK_ROOT=%s",
+        _is_running_in_lambda(),
+        os.environ.get("AWS_EXECUTION_ENV"),
+        os.environ.get("AWS_LAMBDA_FUNCTION_NAME"),
+        os.environ.get("LAMBDA_TASK_ROOT"),
+    )
+
+    # 実行環境を自動判定:
+    # - ローカル(chalice local)では SQS を使わずにバックグラウンド実行
+    # - AWS Lambda では SQS に enqueue（未設定なら設定不備としてエラー）
+    if not _is_running_in_lambda():
+        logger.info("Running extraction worker locally for job %s", job_id)
+        t = threading.Thread(
+            target=_invoke_worker_locally,
+            args=(job_id, uploads_payload),
+            daemon=True,
+        )
+        t.start()
+        return Response(
+            body={
+                "job_id": job_id,
+                "status": "processing",
+                "mode": "local",
+            },
+            status_code=202,
+        )
+
+    if not EXTRACTION_QUEUE_URL:
+        logger.error("EXTRACTION_QUEUE_URL is not configured (Lambda runtime)")
+        return Response(
+            body={
+                "error": "EXTRACTION_QUEUE_URL is not configured. "
+                "AWS 上で SQS キューを作成し、環境変数に設定してください。",
+                "job_id": job_id,
+            },
+            status_code=500,
+        )
+
+    try:
+        sqs_client.send_message(
+            QueueUrl=EXTRACTION_QUEUE_URL,
+            MessageBody=json.dumps(
+                {
+                    "job_id": job_id,
+                    "uploads": uploads_payload,
+                }
+            ),
+        )
+    except Exception as e:
+        logger.error("Failed to enqueue extraction job %s: %s", job_id, str(e))
+        return Response(
+            body={"error": f"Failed to enqueue extraction job: {str(e)}"},
+            status_code=500,
+        )
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "mode": "sqs",
+    }
+
+
+@app.route("/extractions/{job_id}", methods=["GET"], cors=cors_config)
+def get_extraction_job_endpoint(job_id: str):
+    """
+    抽出ジョブの状態および、完了していれば結果を返す。
+    """
+    job = get_job(job_id)
+    if not job:
+        return Response(
+            body={"error": "Job not found"},
+            status_code=404,
+        )
+
+    status = job.get("status", "unknown")
+    # DynamoDB returns Decimal for numbers; ensure int for JSON
+    _num = lambda v: int(v) if v is not None else 0
+    progress = _num(job.get("progress")) if job.get("progress") is not None else 0
+    processed_pages = _num(job.get("processed_pages"))
+    total_pages = _num(job.get("total_pages"))
+    summary = job.get("summary")
+    phase = job.get("phase")
+    detail = job.get("detail")
+    phase_current = int(job["phase_current"]) if job.get("phase_current") is not None else None
+    phase_total = int(job["phase_total"]) if job.get("phase_total") is not None else None
+    phase_unit = job.get("phase_unit")
+    result_s3_key = job.get("result_s3_key")
+
+    response_body: dict = {
+        "job_id": job_id,
+        "status": status,
+        "progress": progress,
+        "processed_pages": processed_pages,
+        "total_pages": total_pages,
+        "summary": summary,
+        "phase": phase,
+        "detail": detail,
+        "phase_current": phase_current,
+        "phase_total": phase_total,
+        "phase_unit": phase_unit,
+        "result": None,
+    }
+
+    # 完了していて結果キーがある場合は、S3 から結果JSONを読み込む
+    if status == "completed" and result_s3_key:
+        try:
+            obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=result_s3_key)
+            content = obj["Body"].read().decode("utf-8")
+            result_json = json.loads(content)
+            response_body["result"] = result_json
+        except Exception as e:
+            logger.error(
+                "Failed to load extraction result for job %s from s3://%s/%s: %s",
+                job_id,
+                BUCKET_NAME,
+                result_s3_key,
+                str(e),
+            )
+
+    return response_body
+
+
 def _parse_json_response(raw_text: str, expected_root_key: str | None = None) -> dict:
     """
     LLMからの応答文字列からJSONオブジェクトを安全に取り出すヘルパー。
@@ -368,30 +583,50 @@ def extraction_worker(event, context):
             update_job_progress(job_id, processed_pages=0, total_pages=0, status="failed")
             continue
 
+        # 進捗配分（全体 0-100 のうち、各フェーズに割り当て）
+        # - テキスト抽出: 0-60（ページ進捗に比例）
+        # - タスク抽出: 60-80
+        # - 依存関係抽出: 80-95
+        # - 整形/保存: 95-100
         processed_pages = 0
-        update_job_progress(job_id, processed_pages=0, total_pages=total_pages, status="processing")
+        update_job_progress(
+            job_id,
+            processed_pages=0,
+            total_pages=total_pages,
+            status="processing",
+            phase="text_extraction",
+            detail="PDFのテキスト抽出中",
+            progress=0,
+            phase_unit="pages",
+            phase_current=0,
+            phase_total=total_pages,
+        )
 
-        # ページごとのメタ情報を含む構造を LLM に渡すために組み立てる
-        # （長文になりすぎないよう、各ページテキストは必要に応じて先頭数千文字にトリム）
+        # ページごとのメタ情報（全文テキスト）を LLM に渡すために組み立てる
         doc_summaries: list[dict] = []
         for doc in all_docs:
             pages_meta = []
             for page in doc["pages"]:
                 processed_pages += 1
                 text = page["text"] or ""
-                snippet = text[:2000]  # そのページの先頭 2000 文字だけをコンテキストとして保持
                 pages_meta.append(
                     {
                         "page_index": page["page_index"],
-                        "snippet": snippet,
+                        "text": text,
                     }
                 )
-                # 進捗をある程度の間隔で更新（ここでは各ページごと）
+                # 進捗を各ページごとに更新（ジョブ全体 0-60% にマッピング）
+                scaled_progress = int((processed_pages / total_pages) * 60) if total_pages else 0
                 update_job_progress(
                     job_id,
                     processed_pages=processed_pages,
                     total_pages=total_pages,
                     status="processing",
+                    phase="text_extraction",
+                    progress=scaled_progress,
+                    phase_unit="pages",
+                    phase_current=processed_pages,
+                    phase_total=total_pages,
                 )
 
             doc_summaries.append(
@@ -406,16 +641,28 @@ def extraction_worker(event, context):
         logger.info("Starting LLM-based extraction for job %s", job_id)
 
         # ---- タスク抽出（ページメタ情報を利用）----
+        # 分母: タスク数（1バッチ抽出 = 0/1 → 完了時 N/N）
         try:
+            update_job_progress(
+                job_id,
+                status="processing",
+                phase="task_extraction",
+                detail="タスク抽出中",
+                # テキスト抽出完了後の 60% から開始
+                progress=60,
+                phase_unit="tasks",
+                phase_current=0,
+                phase_total=1,
+            )
             task_system_prompt = f"""
 あなたは防災計画PDFから災害対応タスクを抽出する専門家です。
 対象となるPDFファイル: {file_names_str}
 
-以下に、PDFごと・ページごとのテキスト抜粋（snippet）が JSON で与えられます。
-この情報をもとに、災害時に必要な対応タスクを構造化して抽出してください。
+以下に、PDFごと・ページごとの全文テキストが JSON で与えられます。
+この情報をもとに、災害時に必要な対応タスクを漏れなく構造化して抽出してください。
 
 ### コンテキストJSON
-{json.dumps({"documents": doc_summaries}, ensure_ascii=False)[:12000]}
+{json.dumps({"documents": doc_summaries}, ensure_ascii=False)}
 
 ### 目的
 地域防災計画等から、災害時に必要な具体的な対応タスクをできる限り漏れなく抽出し、
@@ -457,7 +704,72 @@ def extraction_worker(event, context):
             task_content = task_response.choices[0].message.content
             logger.info("Raw task extraction response (job %s): %s", job_id, task_content)
             task_json = _parse_json_response(task_content, expected_root_key="tasks")
-            tasks = task_json.get("tasks", [])
+            raw_tasks = task_json.get("tasks", [])
+
+            # 類似タスクの集約（name と department でグルーピング）
+            deduped_tasks: list[dict] = []
+            index_by_key: dict[tuple[str, str], int] = {}
+
+            for t in raw_tasks:
+                name = (t.get("name") or "").strip()
+                department = (t.get("department") or "").strip()
+
+                if not name:
+                    # 名前がないタスクはそのまま追加
+                    ctx = t.get("context_snippets") or []
+                    if isinstance(ctx, str):
+                        ctx = [ctx]
+                    t["context_snippets"] = ctx
+                    deduped_tasks.append(t)
+                    continue
+
+                key = (name.lower(), department.lower())
+                if key not in index_by_key:
+                    ctx = t.get("context_snippets") or []
+                    if isinstance(ctx, str):
+                        ctx = [ctx]
+                    t["context_snippets"] = ctx
+                    index_by_key[key] = len(deduped_tasks)
+                    deduped_tasks.append(t)
+                else:
+                    existing = deduped_tasks[index_by_key[key]]
+
+                    # description を統合
+                    existing_desc = existing.get("description")
+                    new_desc = t.get("description")
+                    if new_desc and new_desc != existing_desc:
+                        if existing_desc:
+                            if new_desc not in existing_desc:
+                                existing["description"] = f"{existing_desc} / {new_desc}"
+                        else:
+                            existing["description"] = new_desc
+
+                    # context_snippets をマージ（重複除去・最大5件）
+                    ctx1 = existing.get("context_snippets") or []
+                    if isinstance(ctx1, str):
+                        ctx1 = [ctx1]
+                    ctx2 = t.get("context_snippets") or []
+                    if isinstance(ctx2, str):
+                        ctx2 = [ctx2]
+                    merged_ctx: list[str] = []
+                    for s in ctx1 + ctx2:
+                        if s and s not in merged_ctx:
+                            merged_ctx.append(s)
+                    existing["context_snippets"] = merged_ctx[:5]
+
+            tasks = deduped_tasks
+            num_tasks = len(tasks)
+            update_job_progress(
+                job_id,
+                status="processing",
+                phase="task_extraction",
+                detail=f"タスク抽出完了（{num_tasks}件）",
+                # タスク抽出完了時点で 80% まで進める
+                progress=80,
+                phase_unit="tasks",
+                phase_current=num_tasks,
+                phase_total=num_tasks,
+            )
         except Exception as e:
             logger.error("Task extraction failed for job %s: %s", job_id, str(e))
             update_job_progress(job_id, processed_pages=processed_pages, total_pages=total_pages, status="failed")
@@ -465,6 +777,17 @@ def extraction_worker(event, context):
 
         # ---- 依存関係抽出 ----
         try:
+            update_job_progress(
+                job_id,
+                status="processing",
+                phase="dependency_extraction",
+                detail="依存関係抽出中",
+                # タスク抽出完了後の 80% から開始
+                progress=80,
+                phase_unit="tasks",
+                phase_current=0,
+                phase_total=len(tasks),
+            )
             logger.info("Calling OpenAI for dependency extraction (job %s)", job_id)
             tasks_json_text = json.dumps({"tasks": tasks}, ensure_ascii=False)
 
@@ -515,12 +838,35 @@ def extraction_worker(event, context):
                 dependency_content, expected_root_key="dependencies"
             )
             dependencies = dependency_json.get("dependencies", [])
+            update_job_progress(
+                job_id,
+                status="processing",
+                phase="dependency_extraction",
+                detail=f"依存関係抽出完了（{len(dependencies)}件）",
+                # 依存関係抽出完了時点で 95% まで進める
+                progress=95,
+                phase_unit="tasks",
+                phase_current=len(tasks),
+                phase_total=len(tasks),
+            )
         except Exception as e:
             logger.error("Dependency extraction failed for job %s: %s", job_id, str(e))
             update_job_progress(job_id, processed_pages=processed_pages, total_pages=total_pages, status="failed")
             continue
 
         # ---- 結果を S3 に保存し、ジョブを完了にする ----
+        # 分母: タスク数（全タスク整形済み = N/N）
+        update_job_progress(
+            job_id,
+            status="processing",
+            phase="finalizing",
+            detail="結果を保存・可視化用データに整形中",
+            # 結果保存〜整形フェーズは 95-100%
+            progress=97,
+            phase_unit="tasks",
+            phase_current=len(tasks),
+            phase_total=len(tasks),
+        )
         result_payload = {
             "job_id": job_id,
             "tasks": tasks,
@@ -556,6 +902,12 @@ def extraction_worker(event, context):
                 processed_pages=total_pages,
                 total_pages=total_pages,
                 status="completed",
+                phase="completed",
+                detail="完了",
+                progress=100,
+                phase_unit="tasks",
+                phase_current=len(tasks),
+                phase_total=len(tasks),
             )
         except Exception as e:
             logger.error("Failed to save result for job %s: %s", job_id, str(e))

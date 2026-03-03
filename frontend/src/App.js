@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import UploadPdf from './components/UploadPdf';
 import UploadManager from './components/UploadManager';
 import ChartDisplay from './components/ChartDisplay';
 import ChatUI from './components/ChatUI';
 import SavedFlowcharts from './components/SavedFlowcharts';
 import {
   API_ENDPOINT,
-  analyzePdf,
   checkBackendHealth,
-  listFlowcharts
+  listFlowcharts,
+  createExtractionJob,
+  getExtractionJob,
 } from './config';
 import logo from './assets/icons8-ai-96.png';
 import './App.css';
@@ -44,6 +44,13 @@ function App() {
     const [, setSavedFlowcharts] = useState([]);
     const [savedChart, setSavedChart] = useState(null);
     const [fileId, setFileId] = useState(null);
+  const [activeJob, setActiveJob] = useState(null); // { jobId, status, progress, processedPages, totalPages, summary }
+  const [uploads, setUploads] = useState([]); // server uploads list
+  const [selectedUploadIds, setSelectedUploadIds] = useState([]);
+  const [rightTab, setRightTab] = useState('status'); // 'status' | 'workflow'
+
+  const activeJobId = activeJob?.jobId;
+  const activeJobStatus = activeJob?.status;
 
     // Debug: Log fileId changes
     useEffect(() => {
@@ -90,76 +97,6 @@ function App() {
         return () => clearInterval(intervalId);
     }, []);
 
-    const handlePdfUpload = async (files) => {
-        // バックエンド接続状態を確認
-        if (backendStatus.status !== 'ok') {
-          setError(`バックエンドサーバーに接続できません: ${backendStatus.message}`);
-          return;
-        }
-        
-        const fileArray = Array.isArray(files) ? files : [files];
-        if (fileArray.length === 0) {
-          setError('PDFファイルが選択されていません');
-          return;
-        }
-
-        console.log(
-          `PDF upload initiated for ${fileArray.length} file(s): ${fileArray
-            .map((f) => f.name)
-            .join(', ')}`
-        );
-        setIsLoading(true);
-        setError(null);
-        
-        // Start timing
-        const startTime = performance.now();
-        
-        try {
-          const result = await analyzePdf(fileArray);
-
-          const tasks = result.tasks || [];
-          const dependencies = result.dependencies || [];
-
-          setGraphData({ tasks, dependencies });
-
-          // 互換性のため、最初のファイルIDを state に保持
-          console.log('Current fileId before setting:', fileId);
-          setFileId(result.file_id || null);
-          console.log('New fileId set from PDF analysis:', result.file_id);
-
-          const tasksCount = tasks.length;
-          const depsCount = dependencies.length;
-
-          // チャートコードはMermaid経由ではなく、JSONベース可視化に切り替えるため空のまま保持
-          setChartCode('');
-
-          // チャット履歴に結果サマリを追加
-          setChatHistory([
-            { role: 'user', content: 'PDFから防災計画のワークフローを生成してください' },
-            {
-              role: 'assistant',
-              content: `アップロードされたPDFからタスクを${tasksCount}件、依存関係を${depsCount}件抽出しました。右側のワークフロー図を確認してください。`,
-              chart: null,
-            },
-          ]);
-
-          // Calculate and log elapsed time
-          const endTime = performance.now();
-          const elapsedTime = (endTime - startTime) / 1000; // Convert to seconds
-          console.log(
-            `Time taken to process PDF(s) and build workflow: ${elapsedTime.toFixed(
-              2
-            )} seconds`
-          );
-        } catch (err) {
-          console.error('PDF analysis error', err);
-          setError(`PDFの解析に失敗しました: ${err.message}`);
-        } finally {
-          console.log('PDF upload process completed');
-          setIsLoading(false);
-        }
-    };
-
     // Fetch saved flowcharts when component mounts
     useEffect(() => {
       const fetchSavedFlowcharts = async () => {
@@ -175,6 +112,59 @@ function App() {
       
       fetchSavedFlowcharts();
     }, []);
+
+    // 抽出ジョブのポーリング
+    useEffect(() => {
+      if (!activeJobId) return;
+      if (activeJobStatus === 'completed' || activeJobStatus === 'failed') return;
+
+      let cancelled = false;
+
+      const poll = async () => {
+        try {
+          const data = await getExtractionJob(activeJobId);
+          if (cancelled) return;
+
+          setActiveJob((prev) => ({
+            ...(prev || {}),
+            jobId: data.job_id,
+            status: data.status,
+            progress: Math.min(100, Math.max(0, Number(data.progress) || 0)),
+            processedPages: data.processed_pages ?? 0,
+            totalPages: data.total_pages ?? 0,
+            summary: data.summary || null,
+            phase: data.phase || null,
+            detail: data.detail || null,
+            phaseCurrent: data.phase_current ?? null,
+            phaseTotal: data.phase_total ?? null,
+            phaseUnit: data.phase_unit ?? null,
+          }));
+
+          // 完了時は結果を取り込み
+          if (data.status === 'completed' && data.result) {
+            const tasks = data.result.tasks || [];
+            const dependencies = data.result.dependencies || [];
+            setGraphData({ tasks, dependencies });
+            setChartCode('');
+            setRightTab('workflow');
+          }
+        } catch (err) {
+          console.error('Error polling extraction job:', err);
+          if (!cancelled) {
+            setActiveJob((prev) => prev ? { ...prev, status: 'failed' } : null);
+          }
+        }
+      };
+
+      const intervalId = setInterval(poll, 1500);
+      // すぐ一回実行
+      poll();
+
+      return () => {
+        cancelled = true;
+        clearInterval(intervalId);
+      };
+    }, [activeJobId, activeJobStatus]);
     
     // Update saved flowcharts list after successful save
     const handleSaveModalClose = (success) => {
@@ -363,6 +353,72 @@ function App() {
         });
     };
 
+    const handleRunExtractionFromUploads = async (uploadIds) => {
+      if (backendStatus.status !== 'ok') {
+        setError(`バックエンドサーバーに接続できません: ${backendStatus.message}`);
+        return;
+      }
+      try {
+        setError(null);
+        const res = await createExtractionJob(uploadIds);
+        setActiveJob({
+          jobId: res.job_id,
+          status: res.status || 'queued',
+          progress: 0,
+          processedPages: 0,
+          totalPages: 0,
+          summary: null,
+          phase: null,
+          detail: null,
+        });
+        setRightTab('status');
+      } catch (err) {
+        console.error('Failed to create extraction job:', err);
+        setError(`抽出ジョブの作成に失敗しました: ${err.message}`);
+      }
+    };
+
+    const phaseToStep = (phase) => {
+      const order = ['queued', 'text_extraction', 'task_extraction', 'dependency_extraction', 'finalizing', 'completed'];
+      const idx = order.indexOf(phase || '');
+      const step = idx === -1 ? 1 : Math.min(idx + 1, 5);
+      const total = 5;
+      return { step, total };
+    };
+
+    const phaseLabel = (phase) => {
+      switch (phase) {
+        case 'queued':
+          return '待機中';
+        case 'text_extraction':
+          return 'PDFテキスト抽出';
+        case 'task_extraction':
+          return 'タスク抽出';
+        case 'dependency_extraction':
+          return '依存関係抽出';
+        case 'finalizing':
+          return '可視化用データ整形';
+        case 'completed':
+          return '完了';
+        default:
+          return '処理中';
+      }
+    };
+
+    const unitLabel = (unit) => {
+      if (unit === 'tasks') return 'タスク';
+      if (unit === 'pages') return 'ページ';
+      return '';
+    };
+
+    const isJobRunning =
+      !!activeJob && (activeJob.status === 'queued' || activeJob.status === 'processing');
+
+    const handleStopJob = () => {
+      // 現状はフロント側の追跡のみ停止（バックエンドの処理は継続）
+      setActiveJob(null);
+    };
+
     return (
         <div className="app">
           <header className="app-header">
@@ -375,13 +431,17 @@ function App() {
               >
                 {showSavedFlowcharts ? '戻る' : '保存済みフローチャート'}
               </button>
-              <div className={`backend-status ${backendStatus.status}`}>
-                バックエンド: {
-                  backendStatus.status === 'ok' ? '接続済み' : 
-                  backendStatus.status === 'checking' ? '接続確認中...' : 
-                  '接続エラー'
+              <div
+                className={`backend-status ${backendStatus.status}`}
+                title={
+                  backendStatus.status === 'ok'
+                    ? 'バックエンド接続済み'
+                    : backendStatus.status === 'checking'
+                      ? 'バックエンド接続確認中'
+                      : 'バックエンド接続エラー'
                 }
-              </div>
+                aria-label="バックエンド接続状態"
+              />
             </div>
           </header>
           
@@ -417,12 +477,12 @@ function App() {
             ) : (
               <>
                 <div className="left-panel">
-                  {/* 既存の同期解析用 UploadPdf は残しつつ、新しい UploadManager を上に追加 */}
-                  <UploadManager disabled={backendStatus.status !== 'ok' || isLoading} />
-                  <hr style={{ margin: '1rem 0' }} />
-                  <UploadPdf 
-                    onUpload={handlePdfUpload} 
+                  <UploadManager
                     disabled={backendStatus.status !== 'ok' || isLoading}
+                    onRunExtraction={handleRunExtractionFromUploads}
+                    onUploadsChange={setUploads}
+                    onSelectionChange={setSelectedUploadIds}
+                    isJobRunning={isJobRunning}
                   />
                   <ChatUI 
                       onSend={handleChatUpdate} 
@@ -432,18 +492,118 @@ function App() {
                 </div>
                 
                 <div className="right-panel">
-                  <ChartDisplay 
-                    chartCode={chartCode}
-                    graphData={graphData}
-                    savedChart={savedChart}
-                    fileId={fileId}
-                    onRetryRequest={handleChartRetry}
-                    onCodeUpdate={handleFlowchartUpdate}
-                    onSaveClick={() => {
-                      console.log('Opening SaveFlowchartModal with fileId:', fileId);
-                      setShowSaveModal(true);
-                    }}
-                  />
+                  <div className="workflow-topbar">
+                    <button
+                      type="button"
+                      className={`workflow-tab ${rightTab === 'status' ? 'active' : ''}`}
+                      onClick={() => setRightTab('status')}
+                    >
+                      抽出状況
+                    </button>
+                    <button
+                      type="button"
+                      className={`workflow-tab ${rightTab === 'workflow' ? 'active' : ''}`}
+                      onClick={() => setRightTab('workflow')}
+                      disabled={!graphData}
+                    >
+                      ワークフロー
+                    </button>
+                  </div>
+
+                  {rightTab === 'status' && (
+                    <div className="workflow-status-panel">
+                      <div className="status-section">
+                        <div className="status-title">
+                          対象PDF ({selectedUploadIds.length}/{uploads.length})
+                        </div>
+                        <div className="status-list">
+                          {selectedUploadIds.length === 0 && (
+                            <div className="status-muted">左でPDFを選択して「抽出を実行」を押してください。</div>
+                          )}
+                          {selectedUploadIds.length > 0 && (
+                            <ul>
+                              {uploads
+                                .filter((u) => selectedUploadIds.includes(u.upload_id))
+                                .map((u) => (
+                                  <li key={u.upload_id}>
+                                    {u.filename}（{u.status}）
+                                  </li>
+                                ))}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="status-section">
+                        <div className="status-title">ジョブ進捗</div>
+                        {!activeJob && (
+                          <div className="status-muted">まだジョブは開始されていません。</div>
+                        )}
+                        {activeJob && (
+                          <>
+                            {(() => {
+                              const { step, total } = phaseToStep(activeJob.phase);
+                              const summary = activeJob.summary || {};
+                              const totalPages = activeJob.totalPages ?? null;
+                              const taskCount = summary.task_count ?? null;
+                              const dependencyCount = summary.dependency_count ?? null;
+                              return (
+                                <div className="job-row">
+                                  <div className="job-row-title">
+                                    {phaseLabel(activeJob.phase)} ({step}/{total})
+                                    {isJobRunning && (
+                                      <button
+                                        type="button"
+                                        onClick={handleStopJob}
+                                        className="job-stop-button"
+                                      >
+                                        停止
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className="job-progress-track">
+                                    <div
+                                      className={`job-progress-fill job-progress-fill-${activeJob.status}`}
+                                      style={{ width: `${Math.min(100, Math.max(0, Number(activeJob.progress) || 0))}%` }}
+                                    />
+                                  </div>
+                                  <div className="job-row-meta">
+                                    {activeJob.phaseTotal != null && activeJob.phaseCurrent != null && activeJob.phaseUnit
+                                      ? `${activeJob.phaseCurrent}/${activeJob.phaseTotal} ${unitLabel(activeJob.phaseUnit)}`
+                                      : activeJob.totalPages
+                                        ? `${activeJob.processedPages ?? 0}/${activeJob.totalPages} ページ`
+                                        : '進捗を計測中...'}
+                                  </div>
+                                  {(totalPages != null || taskCount != null || dependencyCount != null) && (
+                                    <div className="job-row-detail">
+                                      {totalPages != null && `ページ: ${totalPages} `}
+                                      {taskCount != null && `／ タスク: ${taskCount} `}
+                                      {dependencyCount != null && `／ 依存関係: ${dependencyCount}`}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {rightTab === 'workflow' && (
+                    <ChartDisplay 
+                      chartCode={chartCode}
+                      graphData={graphData}
+                      savedChart={savedChart}
+                      fileId={fileId}
+                      onRetryRequest={handleChartRetry}
+                      onCodeUpdate={handleFlowchartUpdate}
+                      onSaveClick={() => {
+                        console.log('Opening SaveFlowchartModal with fileId:', fileId);
+                        setShowSaveModal(true);
+                      }}
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -461,7 +621,7 @@ function App() {
             >×</button>
           </div>
         )}
-        
+
         {isLoading && (
           <div className="loading-overlay">
             <div className="loading-spinner" />

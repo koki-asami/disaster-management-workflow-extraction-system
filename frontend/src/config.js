@@ -200,6 +200,36 @@ export async function deleteUpload(uploadId) {
   return response.json();
 }
 
+// ===== 抽出ジョブ API =====
+
+export async function createExtractionJob(uploadIds) {
+  const response = await fetch(`${API_ENDPOINT}/extractions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ upload_ids: uploadIds }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`抽出ジョブの作成に失敗しました: ${errorText}`);
+  }
+
+  return response.json(); // { job_id, status }
+}
+
+export async function getExtractionJob(jobId) {
+  const response = await fetch(`${API_ENDPOINT}/extractions/${encodeURIComponent(jobId)}`, {
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`抽出ジョブ情報の取得に失敗しました: ${errorText}`);
+  }
+
+  return response.json(); // { job_id, status, progress, processed_pages, total_pages, summary, result? }
+}
+
 // ヘルスチェック関数
 export async function checkBackendHealth() {
   try {

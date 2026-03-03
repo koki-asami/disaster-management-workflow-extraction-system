@@ -322,31 +322,6 @@ function App() {
         }
     };
 
-    const handleCodeUpdate = (newCode, history = null) => {
-        console.log('Updating chart code:', newCode);
-        setChartCode(newCode);
-        
-        // 最後のアシスタントメッセージのチャートも更新
-        // historyが指定されていない場合はchatHistoryを使用
-        const currentHistory = history || chatHistory;
-        
-        if (currentHistory.length > 0) {
-          const updatedHistory = [...currentHistory];
-          const lastAssistantIndex = updatedHistory
-            .map((msg, index) => ({ index, role: msg.role }))
-            .filter(item => item.role === 'assistant')
-            .pop();
-          
-          if (lastAssistantIndex) {
-            updatedHistory[lastAssistantIndex.index] = {
-              ...updatedHistory[lastAssistantIndex.index],
-              chart: newCode
-            };
-            setChatHistory(updatedHistory);
-          }
-        }
-    };
-
     const toggleSavedFlowcharts = () => {
       console.log('Toggling saved flowcharts, current fileId:', fileId);
       setShowSavedFlowcharts(!showSavedFlowcharts);

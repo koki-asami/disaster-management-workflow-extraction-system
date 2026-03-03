@@ -114,29 +114,8 @@ function generateCategoryColors(categories) {
   return colors;
 }
 
-// パステルカラーに変換する関数
-function toPastelColor(hexColor) {
-  const r = parseInt(hexColor.slice(1, 3), 16);
-  const g = parseInt(hexColor.slice(3, 5), 16);
-  const b = parseInt(hexColor.slice(5, 7), 16);
-  
-  const pastelFactor = 0.9;
-  const pr = Math.round(r + (255 - r) * pastelFactor);
-  const pg = Math.round(g + (255 - g) * pastelFactor);
-  const pb = Math.round(b + (255 - b) * pastelFactor);
-  
-  const toHex = x => {
-    const hex = x.toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  };
-  
-  return `#${toHex(pr)}${toHex(pg)}${toHex(pb)}`;
-}
-
 function getLayoutOptions(useDagreLayout = false) {
   // 画面幅に応じてレイアウト距離・余白をスケーリング
-  const s = getScale(); // 0.7〜1.2 程度
-
   if (useDagreLayout) {
     return {
       name: 'dagre',
@@ -755,8 +734,6 @@ export default function CytoscapeChart({ mermaidCode, graphData, useDagreLayout 
           if (children.length === 0) return;
 
           const bb = catNode.boundingBox();
-          const cx = (bb.x1 + bb.x2) / 2;
-          const cy = (bb.y1 + bb.y2) / 2;
           const pad = 30 * scale;
 
           const scored = children.toArray().map((n) => {

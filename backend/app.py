@@ -624,6 +624,15 @@ def _parse_json_response(raw_text: str, expected_root_key: str | None = None) ->
     return data
 
 
+# 分割処理用: 1回のLLM呼び出しあたりのページ数・1ページあたりの最大文字数
+PAGES_PER_CHUNK = 50
+MAX_CHARS_PER_PAGE = 5000
+
+# 依存関係抽出: 1回のLLM呼び出しあたりのタスク数（超過時はオーバーラップ付きチャンク分割）
+TASKS_PER_DEPENDENCY_CHUNK = 80
+DEPENDENCY_CHUNK_OVERLAP = 20
+
+
 @app.lambda_function(name="extraction_worker")
 def extraction_worker(event, context):
     """
@@ -720,7 +729,8 @@ def extraction_worker(event, context):
             pages_meta = []
             for page in doc["pages"]:
                 processed_pages += 1
-                text = page["text"] or ""
+                raw_text = page["text"] or ""
+                text = raw_text[:MAX_CHARS_PER_PAGE] if MAX_CHARS_PER_PAGE else raw_text
                 pages_meta.append(
                     {
                         "page_index": page["page_index"],
@@ -788,29 +798,33 @@ def extraction_worker(event, context):
 
         primary_file_id = uploaded_files[0]["file_id"] if uploaded_files else None
 
-        # ---- タスク抽出（ページメタ情報を利用）----
-        # 分母: タスク数（1バッチ抽出 = 0/1 → 完了時 N/N）
+        # ---- タスク抽出（分割処理: 全ページをチャンクに分けてLLM呼び出し、結果をマージ）
         try:
-            update_job_progress(
+            all_pages_flat: list[dict] = []
+            for doc in doc_summaries:
+                for p in doc["pages"]:
+                    all_pages_flat.append({
+                        "filename": doc["filename"],
+                        "object_key": doc["object_key"],
+                        "page_index": p["page_index"],
+                        "text": p["text"],
+                    })
+
+            num_chunks = (len(all_pages_flat) + PAGES_PER_CHUNK - 1) // PAGES_PER_CHUNK
+            logger.info(
+                "Task extraction for job %s: %d pages in %d chunks (%d pages/chunk)",
                 job_id,
-                status="processing",
-                phase="task_extraction",
-                detail="タスク抽出中",
-                # テキスト抽出完了後の 60% から開始
-                progress=60,
-                phase_unit="tasks",
-                phase_current=0,
-                phase_total=1,
+                len(all_pages_flat),
+                num_chunks,
+                PAGES_PER_CHUNK,
             )
-            task_system_prompt = f"""
+
+            all_raw_tasks: list[dict] = []
+            task_system_base = """
 あなたは防災計画PDFから災害対応タスクを抽出する専門家です。
-対象となるPDFファイル: {file_names_str}
 
-以下に、PDFごと・ページごとの全文テキストが JSON で与えられます。
+以下に、PDFごと・ページごとのテキストが JSON で与えられます。
 この情報をもとに、災害時に必要な対応タスクを漏れなく構造化して抽出してください。
-
-### コンテキストJSON
-{json.dumps({"documents": doc_summaries}, ensure_ascii=False)}
 
 ### 目的
 地域防災計画等から、災害時に必要な具体的な対応タスクをできる限り漏れなく抽出し、
@@ -821,7 +835,7 @@ def extraction_worker(event, context):
 
 - ルートオブジェクトに "tasks" というキーを1つだけ持つ
 - "tasks" は配列で、各要素は以下のプロパティを持つ:
-  - "id": 例 "t001" のような一意なID（以降の依存関係で参照できるようにする）
+  - "id": 例 "t001" のような一意なID（このチャンク内で一意であればよい）
   - "name": タスク名（短いラベル）
   - "department": 主担当部署名（複数部署の場合はカンマ区切りで列挙してよい）
   - "description": タスクの具体的な内容
@@ -831,30 +845,77 @@ def extraction_worker(event, context):
   - "context_snippets": 依存関係抽出に役立つ原文抜粋の配列（最大3件程度）
 
 ### 抽出時の注意点
-- 災害応急対策に関する章・節を中心に、時間をかけて網羅的にタスクを抽出してください。
-- 類似タスクが複数PDF・複数ページに跨る場合は、1つのタスクに集約し、description や context_snippets に統合してよいです。
+- 災害応急対策に関する章・節を中心に、網羅的にタスクを抽出してください。
+- 類似タスクが複数ページに跨る場合は、1つのタスクに集約し、description や context_snippets に統合してよいです。
 - JSON以外（解説文、日本語の前置き、コードフェンス ``` など）は一切出力しないでください。
 """
 
-            task_user_message = "防災計画PDF群から災害対応タスクを抽出し、指定のJSONフォーマットで返してください。"
+            for chunk_idx in range(num_chunks):
+                start = chunk_idx * PAGES_PER_CHUNK
+                end = min(start + PAGES_PER_CHUNK, len(all_pages_flat))
+                chunk_pages = all_pages_flat[start:end]
 
-            task_response = _call_chat_completion_with_retry(
-                model=TASK_EXTRACTION_MODEL,
-                messages=[
-                    {"role": "system", "content": task_system_prompt},
-                    {
-                        "role": "user",
-                        "content": task_user_message,
-                    },
-                ],
-            )
+                update_job_progress(
+                    job_id,
+                    status="processing",
+                    phase="task_extraction",
+                    detail=f"タスク抽出中（{chunk_idx + 1}/{num_chunks}チャンク）",
+                    progress=60 + int(((chunk_idx + 1) / num_chunks) * 18),
+                    phase_unit="chunks",
+                    phase_current=chunk_idx,
+                    phase_total=num_chunks,
+                )
 
-            task_content = task_response.choices[0].message.content
-            logger.info("Raw task extraction response (job %s): %s", job_id, task_content)
-            task_json = _parse_json_response(task_content, expected_root_key="tasks")
-            raw_tasks = task_json.get("tasks", [])
+                docs_in_chunk: dict[tuple[str, str], dict] = {}
+                for p in chunk_pages:
+                    key = (p["filename"], p["object_key"])
+                    if key not in docs_in_chunk:
+                        docs_in_chunk[key] = {
+                            "filename": p["filename"],
+                            "object_key": p["object_key"],
+                            "pages": [],
+                        }
+                    docs_in_chunk[key]["pages"].append({
+                        "page_index": p["page_index"],
+                        "text": p["text"],
+                    })
+                chunk_docs = list(docs_in_chunk.values())
+                context_json = json.dumps({"documents": chunk_docs}, ensure_ascii=False)
 
-            # 類似タスクの集約（name と department でグルーピング）
+                task_system_prompt = f"""対象となるPDFファイル: {file_names_str}
+
+### コンテキストJSON（チャンク {chunk_idx + 1}/{num_chunks}）
+{context_json}
+""" + task_system_base
+
+                task_user_message = "防災計画PDF群から災害対応タスクを抽出し、指定のJSONフォーマットで返してください。"
+
+                task_response = _call_chat_completion_with_retry(
+                    model=TASK_EXTRACTION_MODEL,
+                    messages=[
+                        {"role": "system", "content": task_system_prompt},
+                        {"role": "user", "content": task_user_message},
+                    ],
+                )
+                task_content = task_response.choices[0].message.content
+                logger.info(
+                    "Task extraction chunk %d/%d (job %s): %d chars response",
+                    chunk_idx + 1,
+                    num_chunks,
+                    job_id,
+                    len(task_content or ""),
+                )
+                task_json = _parse_json_response(task_content, expected_root_key="tasks")
+                chunk_tasks = task_json.get("tasks", [])
+                for t in chunk_tasks:
+                    tid = t.get("id")
+                    if tid and not tid.startswith("chunk"):
+                        t["id"] = f"chunk{chunk_idx}_{tid}"
+                all_raw_tasks.extend(chunk_tasks)
+
+            raw_tasks = all_raw_tasks
+
+            # 類似タスクの集約（name と department でグルーピング）＋ IDの再採番
             deduped_tasks: list[dict] = []
             index_by_key: dict[tuple[str, str], int] = {}
 
@@ -905,6 +966,8 @@ def extraction_worker(event, context):
                             merged_ctx.append(s)
                     existing["context_snippets"] = merged_ctx[:5]
 
+            for i, t in enumerate(deduped_tasks):
+                t["id"] = f"t{i + 1:03d}"
             tasks = deduped_tasks
             num_tasks = len(tasks)
             update_job_progress(
@@ -923,23 +986,50 @@ def extraction_worker(event, context):
             update_job_progress(job_id, processed_pages=processed_pages, total_pages=total_pages, status="failed")
             continue
 
-        # ---- 依存関係抽出 ----
+        # ---- 依存関係抽出（タスク数が多い場合はオーバーラップ付きチャンク分割）----
         try:
-            update_job_progress(
-                job_id,
-                status="processing",
-                phase="dependency_extraction",
-                detail="依存関係抽出中",
-                # タスク抽出完了後の 80% から開始
-                progress=80,
-                phase_unit="tasks",
-                phase_current=0,
-                phase_total=len(tasks),
-            )
-            logger.info("Calling OpenAI for dependency extraction (job %s)", job_id)
-            tasks_json_text = json.dumps({"tasks": tasks}, ensure_ascii=False)
+            task_ids = {t.get("id") for t in tasks if t.get("id")}
+            dep_chunk_size = TASKS_PER_DEPENDENCY_CHUNK
+            dep_overlap = DEPENDENCY_CHUNK_OVERLAP
+            dep_step = max(1, dep_chunk_size - dep_overlap)
 
-            dependency_system_prompt = f"""
+            if len(tasks) <= dep_chunk_size:
+                dep_chunks = [tasks]
+            else:
+                dep_chunks = []
+                start = 0
+                while start < len(tasks):
+                    end = min(start + dep_chunk_size, len(tasks))
+                    dep_chunks.append(tasks[start:end])
+                    if end >= len(tasks):
+                        break
+                    start += dep_step
+
+            num_dep_chunks = len(dep_chunks)
+            logger.info(
+                "Dependency extraction for job %s: %d tasks in %d chunks",
+                job_id,
+                len(tasks),
+                num_dep_chunks,
+            )
+
+            all_dependencies: list[dict] = []
+            seen_dep_keys: set[tuple[str, str]] = set()
+
+            for dep_idx, chunk_tasks in enumerate(dep_chunks):
+                update_job_progress(
+                    job_id,
+                    status="processing",
+                    phase="dependency_extraction",
+                    detail=f"依存関係抽出中（{dep_idx + 1}/{num_dep_chunks}チャンク）",
+                    progress=80 + int(((dep_idx + 1) / num_dep_chunks) * 15),
+                    phase_unit="chunks",
+                    phase_current=dep_idx,
+                    phase_total=num_dep_chunks,
+                )
+
+                tasks_json_text = json.dumps({"tasks": chunk_tasks}, ensure_ascii=False)
+                dependency_system_prompt = f"""
 あなたは防災計画に基づくタスク間の依存関係を整理する専門家です。
 対象となるPDFファイル: {file_names_str}
 
@@ -963,35 +1053,47 @@ def extraction_worker(event, context):
 - JSON以外（説明文、日本語の前置き、コードフェンスなど）は一切出力しないでください。
 """
 
-            dependency_user_message = "上記タスク間の依存関係を、指定のJSONフォーマットで抽出してください。"
+                dependency_user_message = "上記タスク間の依存関係を、指定のJSONフォーマットで抽出してください。"
 
-            dependency_response = _call_chat_completion_with_retry(
-                model=DEPENDENCY_EXTRACTION_MODEL,
-                messages=[
-                    {"role": "system", "content": dependency_system_prompt},
-                    {
-                        "role": "user",
-                        "content": dependency_user_message,
-                    },
-                ],
-            )
+                dependency_response = _call_chat_completion_with_retry(
+                    model=DEPENDENCY_EXTRACTION_MODEL,
+                    messages=[
+                        {"role": "system", "content": dependency_system_prompt},
+                        {"role": "user", "content": dependency_user_message},
+                    ],
+                )
+                dependency_content = dependency_response.choices[0].message.content
+                logger.info(
+                    "Dependency extraction chunk %d/%d (job %s): %d chars response",
+                    dep_idx + 1,
+                    num_dep_chunks,
+                    job_id,
+                    len(dependency_content or ""),
+                )
+                dependency_json = _parse_json_response(
+                    dependency_content, expected_root_key="dependencies"
+                )
+                chunk_deps = dependency_json.get("dependencies", [])
 
-            dependency_content = dependency_response.choices[0].message.content
-            logger.info(
-                "Raw dependency extraction response (job %s): %s",
-                job_id,
-                dependency_content,
-            )
-            dependency_json = _parse_json_response(
-                dependency_content, expected_root_key="dependencies"
-            )
-            dependencies = dependency_json.get("dependencies", [])
+                for dep in chunk_deps:
+                    from_id = dep.get("from")
+                    to_id = dep.get("to")
+                    if not from_id or not to_id:
+                        continue
+                    if from_id not in task_ids or to_id not in task_ids:
+                        continue
+                    key = (from_id, to_id)
+                    if key in seen_dep_keys:
+                        continue
+                    seen_dep_keys.add(key)
+                    all_dependencies.append(dep)
+
+            dependencies = all_dependencies
             update_job_progress(
                 job_id,
                 status="processing",
                 phase="dependency_extraction",
                 detail=f"依存関係抽出完了（{len(dependencies)}件）",
-                # 依存関係抽出完了時点で 95% まで進める
                 progress=95,
                 phase_unit="tasks",
                 phase_current=len(tasks),

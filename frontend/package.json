@@ -9,8 +9,12 @@
         "@testing-library/user-event": "^13.5.0",
         "bootstrap": "^5.3.3",
         "cytoscape": "^3.33.1",
+        "cytoscape-cose-bilkent": "^4.1.0",
         "cytoscape-dagre": "^2.5.0",
+        "cytoscape-elk": "^2.3.0",
         "cytoscape-fcose": "^2.2.0",
+        "cytoscape-no-overlap": "^1.0.1",
+        "elkjs": "^0.11.1",
         "html2canvas": "^1.4.1",
         "http-proxy-middleware": "^3.0.3",
         "mermaid": "^10.4.0",
@@ -60,6 +64,7 @@
     },
     "devDependencies": {
         "@aws-amplify/backend": "^1.2.1",
-        "@aws-amplify/backend-cli": "^1.5.0"
+        "@aws-amplify/backend-cli": "^1.5.0",
+        "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
     }
 }

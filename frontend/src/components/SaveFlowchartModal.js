@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import './SaveFlowchartModal.css';
 import { saveFlowchart } from '../config';
 
-const SaveFlowchartModal = ({ show, handleClose, chartCode, onSave, fileId }) => {
+const SaveFlowchartModal = ({ show, handleClose, chartCode, onSave, fileId, graphData }) => {
     const [locationType, setLocationType] = useState('prefecture');
     const [locationName, setLocationName] = useState('');
     const [title, setTitle] = useState('');
@@ -30,21 +30,31 @@ const SaveFlowchartModal = ({ show, handleClose, chartCode, onSave, fileId }) =>
         console.log('fileId:', fileId);
 
         try {
-            // Check if chart code is too large (400KB)
-            const chartCodeSize = new Blob([chartCode]).size;
-            if (chartCodeSize > 400 * 1024) {
-                setError('フローチャートのサイズが大きすぎます。チャートを簡略化するか、別の方法で保存してください。');
+            // chartCode も graphData もない場合は保存できない
+            if (!chartCode && !graphData) {
+                setError('保存できるフローチャートデータがありません（タスク抽出後にお試しください）');
                 setIsLoading(false);
                 return;
             }
 
+            // Check if chart code is too large (400KB) — chartCode がある場合のみ
+            if (chartCode) {
+                const chartCodeSize = new Blob([chartCode]).size;
+                if (chartCodeSize > 400 * 1024) {
+                    setError('フローチャートのサイズが大きすぎます。チャートを簡略化するか、別の方法で保存してください。');
+                    setIsLoading(false);
+                    return;
+                }
+            }
+
             const data = await saveFlowchart(
-                chartCode,
+                chartCode || '',
                 locationType,
                 locationName,
                 title,
                 null, // chartId
-                fileId
+                fileId,
+                graphData || null,
             );
 
             if (onSave) {

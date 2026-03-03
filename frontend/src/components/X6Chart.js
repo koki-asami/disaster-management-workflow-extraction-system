@@ -34,7 +34,9 @@ function buildX6ModelFromGraphData(graphData) {
   }
 
   const tasks = graphData.tasks || [];
-  const dependencies = graphData.dependencies || [];
+  const dependencies = Array.isArray(graphData.dependencies)
+    ? graphData.dependencies
+    : [];
 
   // カテゴリごとに行を分ける簡易レイアウト
   const categoryOrder = [];

@@ -41,7 +41,24 @@ function ChartDisplay({ chartCode, graphData, onRetryRequest, onCodeUpdate, save
 
   const exportJson = () => {
     if (!graphData) return;
-    const blob = new Blob([JSON.stringify(graphData, null, 2)], {
+
+    // @Users/kokiasami/.Trash/workflow.json と同じ形式に揃えつつ、
+    // 必要であれば chat 用の file_id も一緒に保存する
+    // {
+    //   "tasks": [...],
+    //   "dependencies": [...],
+    //   "file_id": "..."
+    // }
+    const payload = {
+      tasks: Array.isArray(graphData.tasks) ? graphData.tasks : [],
+      dependencies: Array.isArray(graphData.dependencies)
+        ? graphData.dependencies
+        : [],
+      // graphData 内に file_id があればそれを優先し、なければ現在の state の fileId を使う
+      file_id: graphData.file_id || fileId || null,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
@@ -121,6 +138,7 @@ function ChartDisplay({ chartCode, graphData, onRetryRequest, onCodeUpdate, save
         handleClose={handleCloseSaveModal} 
         chartCode={chartCode} 
         fileId={fileId}
+        graphData={graphData}
       />
     </div>
   );

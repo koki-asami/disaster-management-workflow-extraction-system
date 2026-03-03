@@ -272,7 +272,16 @@ export async function checkBackendHealth() {
 }
 
 // Save flowchart to database
-export const saveFlowchart = async (chartCode, locationType, locationName, title = '', chartId = null, fileId = null) => {
+// graphData には { tasks, dependencies } などのJSONをそのまま渡す
+export const saveFlowchart = async (
+  chartCode,
+  locationType,
+  locationName,
+  title = '',
+  chartId = null,
+  fileId = null,
+  graphData = null
+) => {
   try {
     const response = await fetch(`${API_ENDPOINT}/save_flowchart`, {
       method: 'POST',
@@ -285,7 +294,8 @@ export const saveFlowchart = async (chartCode, locationType, locationName, title
         location_name: locationName,
         title: title,
         chart_id: chartId,
-        file_id: fileId
+        file_id: fileId,
+        graph_data: graphData,
       }),
     });
     

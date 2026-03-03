@@ -144,9 +144,18 @@ function App() {
           if (data.status === 'completed' && data.result) {
             const tasks = data.result.tasks || [];
             const dependencies = data.result.dependencies || [];
-            setGraphData({ tasks, dependencies });
+            const resultFileId = data.result.file_id || null;
+
+            // グラフデータに file_id も保持しておく（JSONエクスポート時に利用）
+            setGraphData({ tasks, dependencies, file_id: resultFileId });
             setChartCode('');
             setRightTab('workflow');
+
+            // OpenAI にアップロードした PDF の file_id を state に保存（チャット用）
+            if (resultFileId) {
+              setFileId(resultFileId);
+              console.log('Set fileId from extraction result:', resultFileId);
+            }
           }
         } catch (err) {
           console.error('Error polling extraction job:', err);
@@ -201,7 +210,8 @@ function App() {
                 body: JSON.stringify({
                     instruction: instruction,
                     history: chatHistory,
-                    file_id: fileId
+                    file_id: fileId,
+                    graph_data: graphData,
                 }),
             });
             
@@ -216,18 +226,21 @@ function App() {
                 const newMessage = {
                     role: 'assistant',
                     content: data.message,
-                    chart: data.flowchart || null
+                    chart: null
                 };
                 
                 setChatHistory([...updatedHistory, newMessage]);
-                
-                // フローチャートがある場合は設定
-                if (data.flowchart) {
-                    console.log('Updating chart code from chat response:', data.flowchart);
-                    // 更新された履歴を渡してhandleCodeUpdateを呼び出す
-                    const fullUpdatedHistory = [...updatedHistory, newMessage];
-                    handleCodeUpdate(data.flowchart, fullUpdatedHistory);
-                }
+            }
+
+            // updated_workflow によるグラフ更新
+            if (data.graph_data && Array.isArray(data.graph_data.tasks) && Array.isArray(data.graph_data.dependencies)) {
+                console.log('Updating graph data from chat response');
+                setGraphData({
+                  tasks: data.graph_data.tasks,
+                  dependencies: data.graph_data.dependencies,
+                });
+                setChartCode('');
+                setRightTab('workflow');
             }
             
             setIsLoading(false);
@@ -261,7 +274,9 @@ function App() {
         },
         body: JSON.stringify({
           instruction: `${lastUserMessage.content}\n\n追加情報: 前回のフローチャートにはMermaid構文エラーがありました。有効なMermaid構文で再生成してください。`,
-          history: chatHistory.slice(0, -1) // 最後のアシスタントメッセージを除外
+          history: chatHistory.slice(0, -1), // 最後のアシスタントメッセージを除外
+          file_id: fileId,
+          graph_data: graphData,
         }),
       });
       
@@ -283,16 +298,21 @@ function App() {
           updatedHistory[lastAssistantIndex.index] = {
             role: 'assistant',
             content: data.message,
-            chart: data.flowchart || null
+            chart: null
           };
           setChatHistory(updatedHistory);
         }
       }
       
-      // フローチャートがある場合は設定
-      if (data.flowchart) {
-        // 更新された履歴を渡してhandleCodeUpdateを呼び出す
-    }
+      if (data.graph_data && Array.isArray(data.graph_data.tasks) && Array.isArray(data.graph_data.dependencies)) {
+        console.log('Updating graph data from chat retry response');
+        setGraphData({
+          tasks: data.graph_data.tasks,
+          dependencies: data.graph_data.dependencies,
+        });
+        setChartCode('');
+        setRightTab('workflow');
+      }
 
       setIsLoading(false);
         } catch (error) {
@@ -447,33 +467,46 @@ function App() {
           
           <main className="app-main">
             {showSavedFlowcharts ? (
-              <SavedFlowcharts 
-                onSelectFlowchart={(chartData) => {
-                  // チャートコードを設定
-                  setChartCode(chartData.chart_code);
+              <div className="saved-flowcharts-page">
+                <SavedFlowcharts 
+                  onSelectFlowchart={(chartData) => {
+                    // Mermaidコード（あれば）を設定
+                    setChartCode(chartData.chart_code || '');
 
-                  // 選択したフローチャートを現在のsavedChartとして設定
-                  setSavedChart(chartData);
-                  
-                  // file_idを設定（存在する場合）
-                  if (chartData.file_id) {
-                    setFileId(chartData.file_id);
-                    console.log('Loaded file_id from saved flowchart:', chartData.file_id);
-                  } else {
-                    console.log('No file_id found in saved flowchart');
-                  }
-                  
-                  // チャット履歴に選択したフローチャートを追加
-                  const newMessage = {
-                    role: 'assistant',
-                    content: `「${chartData.title || `${chartData.location_name} 防災計画`}」のフローチャートを表示しました。`,
-                    chart: chartData.chart_code
-                  };
-                  
-                  setChatHistory(prevHistory => [...prevHistory, newMessage]);
-                  setShowSavedFlowcharts(false);
-                }}
-              />
+                    // 抽出済みタスク／依存関係（graph_data）があれば、そのまま反映
+                    if (chartData.graph_data) {
+                      setGraphData(chartData.graph_data);
+                      setRightTab('workflow');
+                    }
+
+                    // 選択したフローチャートを現在のsavedChartとして設定
+                    setSavedChart(chartData);
+                    
+                    // file_idを設定（存在する場合）
+                    if (chartData.file_id) {
+                      setFileId(chartData.file_id);
+                      console.log('Loaded file_id from saved flowchart:', chartData.file_id);
+                    } else {
+                      console.log('No file_id found in saved flowchart');
+                    }
+                    
+                    // チャット履歴に選択したフローチャートを追加
+                    const newMessage = {
+                      role: 'assistant',
+                      content: `「${chartData.title || `${chartData.location_name} 防災計画`}」のフローチャートを表示しました。`,
+                      chart: chartData.chart_code || null,
+                    };
+                    
+                    setChatHistory(prevHistory => [...prevHistory, newMessage]);
+                    setShowSavedFlowcharts(false);
+
+                    // 全体画面を一番上にスクロール
+                    requestAnimationFrame(() => {
+                      window.scrollTo(0, 0);
+                    });
+                  }}
+                />
+              </div>
             ) : (
               <>
                 <div className="left-panel">
@@ -634,6 +667,7 @@ function App() {
         handleClose={handleSaveModalClose}
         chartCode={chartCode}
         fileId={fileId}
+        graphData={graphData}
         onSave={(data) => {
           console.log('Saving flowchart with fileId:', fileId);
           // Update the saved flowcharts list

@@ -55,8 +55,8 @@ const SavedFlowcharts = ({ onSelectFlowchart }) => {
       setSelectError(null);
       
       // If the chart already has complete data including chart_code, use it directly
-      if (chart.chart_code) {
-        console.log("Using existing chart data with chart_code:", chart.chart_code);
+      if (chart.chart_code || chart.graph_data) {
+        console.log("Using existing chart data:", chart);
         onSelectFlowchart(chart);
         return;
       }
@@ -65,14 +65,7 @@ const SavedFlowcharts = ({ onSelectFlowchart }) => {
       console.log(`Fetching complete data for flowchart ID: ${chart.id}`);
       const completeChart = await getFlowchart(chart.id);
       console.log("Fetched complete chart data:", completeChart);
-      
-      // Ensure chart_code exists in the complete chart data
-      if (!completeChart.chart_code) {
-        console.error("Fetched chart data does not contain chart_code:", completeChart);
-        setSelectError("フローチャートデータにコードが含まれていません");
-        return;
-      }
-      
+
       // Pass the complete chart data to the parent component
       onSelectFlowchart(completeChart);
     } catch (err) {

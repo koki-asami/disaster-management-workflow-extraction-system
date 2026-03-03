@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import UploadPdf from './components/UploadPdf';
+import UploadManager from './components/UploadManager';
 import ChartDisplay from './components/ChartDisplay';
 import ChatUI from './components/ChatUI';
 import SavedFlowcharts from './components/SavedFlowcharts';
@@ -33,6 +34,7 @@ function App() {
     }, []);
 
     const [chartCode, setChartCode] = useState('');
+    const [graphData, setGraphData] = useState(null); // { tasks, dependencies }
     const [chatHistory, setChatHistory] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -88,14 +90,24 @@ function App() {
         return () => clearInterval(intervalId);
     }, []);
 
-    const handlePdfUpload = async (file) => {
+    const handlePdfUpload = async (files) => {
         // バックエンド接続状態を確認
         if (backendStatus.status !== 'ok') {
           setError(`バックエンドサーバーに接続できません: ${backendStatus.message}`);
           return;
         }
         
-        console.log(`PDF upload initiated: ${file.name}`);
+        const fileArray = Array.isArray(files) ? files : [files];
+        if (fileArray.length === 0) {
+          setError('PDFファイルが選択されていません');
+          return;
+        }
+
+        console.log(
+          `PDF upload initiated for ${fileArray.length} file(s): ${fileArray
+            .map((f) => f.name)
+            .join(', ')}`
+        );
         setIsLoading(true);
         setError(null);
         
@@ -103,44 +115,42 @@ function App() {
         const startTime = performance.now();
         
         try {
-          const result = await analyzePdf(file);
-          
-          if (result.flowchart) {
-            console.log('Flowchart received from backend');
-            // Mermaid記法を抽出
-            const mermaidPattern = /```mermaid\s*([\s\S]*?)\s*```/;
-            const match = result.flowchart.match(mermaidPattern);
-            
-            let extractedChart = "";
-            let textContent = result.flowchart;
-            
-            if (match) {
-              console.log('Mermaid syntax found in response');
-              extractedChart = match[1];
-              textContent = result.flowchart.replace(mermaidPattern, '').trim();
-            } else {
-              console.log('No mermaid syntax found, using full response');
-              extractedChart = result.flowchart;
-              textContent = "フローチャートを生成しました。";
-            }
-            
-            console.log('Setting flowchart and updating chat history');
-            setChartCode(extractedChart);
-            console.log('Current fileId before setting:', fileId);
-            setFileId(result.file_id);
-            console.log('New fileId set from PDF analysis:', result.file_id);
-            
-            // チャット履歴に追加
-            setChatHistory([
-              { role: 'user', content: 'PDFから防災計画のフローチャートを生成してください' },
-              { role: 'assistant', content: textContent, chart: extractedChart }
-            ]);
-            
-            // Calculate and log elapsed time
-            const endTime = performance.now();
-            const elapsedTime = (endTime - startTime) / 1000; // Convert to seconds
-            console.log(`Time taken to process PDF and display flowchart: ${elapsedTime.toFixed(2)} seconds`);
-          }
+          const result = await analyzePdf(fileArray);
+
+          const tasks = result.tasks || [];
+          const dependencies = result.dependencies || [];
+
+          setGraphData({ tasks, dependencies });
+
+          // 互換性のため、最初のファイルIDを state に保持
+          console.log('Current fileId before setting:', fileId);
+          setFileId(result.file_id || null);
+          console.log('New fileId set from PDF analysis:', result.file_id);
+
+          const tasksCount = tasks.length;
+          const depsCount = dependencies.length;
+
+          // チャートコードはMermaid経由ではなく、JSONベース可視化に切り替えるため空のまま保持
+          setChartCode('');
+
+          // チャット履歴に結果サマリを追加
+          setChatHistory([
+            { role: 'user', content: 'PDFから防災計画のワークフローを生成してください' },
+            {
+              role: 'assistant',
+              content: `アップロードされたPDFからタスクを${tasksCount}件、依存関係を${depsCount}件抽出しました。右側のワークフロー図を確認してください。`,
+              chart: null,
+            },
+          ]);
+
+          // Calculate and log elapsed time
+          const endTime = performance.now();
+          const elapsedTime = (endTime - startTime) / 1000; // Convert to seconds
+          console.log(
+            `Time taken to process PDF(s) and build workflow: ${elapsedTime.toFixed(
+              2
+            )} seconds`
+          );
         } catch (err) {
           console.error('PDF analysis error', err);
           setError(`PDFの解析に失敗しました: ${err.message}`);
@@ -407,6 +417,9 @@ function App() {
             ) : (
               <>
                 <div className="left-panel">
+                  {/* 既存の同期解析用 UploadPdf は残しつつ、新しい UploadManager を上に追加 */}
+                  <UploadManager disabled={backendStatus.status !== 'ok' || isLoading} />
+                  <hr style={{ margin: '1rem 0' }} />
                   <UploadPdf 
                     onUpload={handlePdfUpload} 
                     disabled={backendStatus.status !== 'ok' || isLoading}
@@ -421,6 +434,7 @@ function App() {
                 <div className="right-panel">
                   <ChartDisplay 
                     chartCode={chartCode}
+                    graphData={graphData}
                     savedChart={savedChart}
                     fileId={fileId}
                     onRetryRequest={handleChartRetry}

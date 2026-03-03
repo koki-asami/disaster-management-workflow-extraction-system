@@ -6,8 +6,11 @@
       "api_gateway_stage": "api",
       "region": "ap-northeast-1",
       "environment_variables": {
-        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE",
-        "FLOWCHART_TABLE_NAME": "flowcharts_dev"
+        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY",
+        "FLOWCHART_TABLE_NAME": "flowcharts_dev",
+        "TASK_EXTRACTION_MODEL": "gpt-5.2",
+        "DEPENDENCY_EXTRACTION_MODEL": "gpt-5.2",
+        "CHAT_MODEL": "gpt-5.2"
       },
       "iam_policy_file": ["dynamodb_policy.json", "lambda_policy.json"],
       "packaging": {
@@ -31,8 +34,11 @@
     "prod": {
       "api_gateway_stage": "api",
       "environment_variables": {
-        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE",
-        "FLOWCHART_TABLE_NAME": "flowcharts_prod"
+        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY",
+        "FLOWCHART_TABLE_NAME": "flowcharts_prod",
+        "TASK_EXTRACTION_MODEL": "gpt-5.2",
+        "DEPENDENCY_EXTRACTION_MODEL": "gpt-5.2",
+        "CHAT_MODEL": "gpt-5.2"
       },
       "iam_policy_file": ["dynamodb_policy.json", "lambda_policy.json"],
       "packaging": {

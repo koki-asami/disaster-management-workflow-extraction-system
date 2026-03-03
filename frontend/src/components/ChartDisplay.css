@@ -7,6 +7,7 @@
   background-color: #f8f9fa;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  position: relative;
 }
 
 /* .chart-container h2 {
@@ -90,6 +91,23 @@
   overflow: hidden;
   position: relative;
   background-color: #fff;
+}
+
+.chart-stats-overlay {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  background-color: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #444;
+  z-index: 10;
+}
+
+.chart-stats-item + .chart-stats-item {
+  margin-top: 4px;
 }
 
 /* Cytoscape 表示領域（CytoscapeChart側でも inline style を指定） */
@@ -313,4 +331,29 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+.edge-reason-tooltip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  max-width: 420px;
+  background-color: rgba(255, 255, 255, 0.97);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #333;
+  z-index: 20;
+  border: 1px solid #e0e0e0;
+}
+
+.edge-reason-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.edge-reason-body {
+  line-height: 1.5;
+  white-space: pre-wrap;
 }

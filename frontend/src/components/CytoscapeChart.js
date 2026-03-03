@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
 import dagre from 'cytoscape-dagre';
 import fcose from 'cytoscape-fcose';
@@ -70,6 +70,149 @@ function toPastelColor(hexColor) {
   };
   
   return `#${toHex(pr)}${toHex(pg)}${toHex(pb)}`;
+}
+
+function getLayoutOptions() {
+  return {
+    name: 'fcose',
+    quality: 'proof',
+    randomize: false,
+    animate: true,
+    animationDuration: 1000,
+    fit: true,
+    padding: 80,
+    nodeDimensionsIncludeLabels: true,
+    packComponents: true,
+    step: 'all',
+    // 矢印の重なりを減らすために距離と反発を強めに設定
+    nodeRepulsion: 9000,
+    idealEdgeLength: 160,
+    edgeElasticity: 0.5,
+    nestingFactor: 0.1,
+    gravity: 0.25,
+    gravityRangeCompound: 1.8,
+    gravityCompound: 1.0,
+    gravityRange: 4.0,
+    initialEnergyOnIncremental: 0.3,
+    tile: true,
+    tilingPaddingVertical: 40,
+    tilingPaddingHorizontal: 40
+  };
+}
+
+function buildElementsFromGraphData(graphData) {
+  if (
+    !graphData ||
+    typeof graphData !== 'object' ||
+    !Array.isArray(graphData.tasks)
+  ) {
+    return { elements: [], categories: [], categoryColors: {} };
+  }
+
+  const tasks = graphData.tasks || [];
+  const dependencies = graphData.dependencies || [];
+
+  // カテゴリ一覧を抽出（なければ「その他」にまとめる）
+  const categoriesSet = new Set();
+  tasks.forEach((t) => {
+    if (t.category) {
+      categoriesSet.add(t.category);
+    }
+  });
+  if (categoriesSet.size === 0) {
+    categoriesSet.add('その他');
+  }
+
+  const categories = Array.from(categoriesSet);
+  const categoryColors = generateCategoryColors(categories);
+
+  const elements = [];
+
+  // 1. カテゴリノード
+  categories.forEach((cat) => {
+    elements.push({
+      group: 'nodes',
+      data: {
+        id: `category_${cat}`,
+        label: cat,
+        color: categoryColors[cat],
+        isCategory: true,
+        type: 'category',
+      },
+      classes: 'category-node',
+    });
+  });
+
+  // 2. タスクコンテナ + 詳細ノード
+  tasks.forEach((task) => {
+    const category = task.category || 'その他';
+    const categoryId = `category_${category}`;
+    const color = categoryColors[category] || '#4a6fa5';
+    const taskId = task.id || task.name || `task_${Math.random().toString(36).slice(2)}`;
+    const safeTaskId = String(taskId);
+
+    // タスクコンテナ
+    elements.push({
+      group: 'nodes',
+      data: {
+        id: safeTaskId,
+        label: task.name || safeTaskId,
+        parent: categoryId,
+        color: color,
+        type: 'task-container',
+      },
+      classes: 'task-container',
+    });
+
+    // 説明ノード
+    if (task.description) {
+      elements.push({
+        group: 'nodes',
+        data: {
+          id: `${safeTaskId}_desc`,
+          label: task.description,
+          parent: safeTaskId,
+          color: color,
+          type: 'description',
+        },
+        classes: 'detail-node description',
+      });
+    }
+
+    // 部署ノード
+    if (task.department) {
+      elements.push({
+        group: 'nodes',
+        data: {
+          id: `${safeTaskId}_dept`,
+          label: `担当: ${task.department}`,
+          parent: safeTaskId,
+          color: color,
+          type: 'department',
+        },
+        classes: 'detail-node department',
+      });
+    }
+  });
+
+  // 3. 依存関係エッジ
+  dependencies.forEach((dep) => {
+    if (!dep || !dep.from || !dep.to) return;
+    const from = String(dep.from);
+    const to = String(dep.to);
+    const edgeId = `${from}->${to}`;
+    elements.push({
+      group: 'edges',
+      data: {
+        id: edgeId,
+        source: from,
+        target: to,
+        reason: dep.reason || '',
+      },
+    });
+  });
+
+  return { elements, categories, categoryColors };
 }
 
 function parseMermaidToElements(mermaidCode) {
@@ -291,14 +434,23 @@ function parseMermaidToElements(mermaidCode) {
   return { elements, categories, categoryColors };
 }
 
-export default function CytoscapeChart({ mermaidCode }) {
+export default function CytoscapeChart({ mermaidCode, graphData }) {
   const containerRef = useRef(null);
   const cyRef = useRef(null);
+  const [hoveredEdgeInfo, setHoveredEdgeInfo] = useState(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    // eslint-disable-next-line no-unused-vars
-    const { elements, categories, categoryColors } = parseMermaidToElements(mermaidCode);
+
+    // JSONグラフデータがある場合は優先して使用し、なければMermaidをパース
+    const {
+      elements,
+      categories,
+      categoryColors,
+      // eslint-disable-next-line no-unused-vars
+    } = graphData && Array.isArray(graphData.tasks)
+      ? buildElementsFromGraphData(graphData)
+      : parseMermaidToElements(mermaidCode);
 
     // 要素が取れない場合は簡易プレースホルダーを表示
     if (!elements || elements.length === 0) {
@@ -474,33 +626,7 @@ export default function CytoscapeChart({ mermaidCode }) {
           }
         }
       ],
-      layout: {
-        name: 'fcose',
-        quality: 'proof',
-        randomize: false,
-        animate: true,
-        animationDuration: 1000,
-        fit: true,
-        padding: 50,
-        nodeDimensionsIncludeLabels: true,
-        packComponents: true,
-        step: 'all',
-        
-        // 正方形に近い配置を目指す設定
-        nodeRepulsion: 4500,
-        idealEdgeLength: 100,
-        edgeElasticity: 0.45,
-        nestingFactor: 0.1,
-        gravity: 0.25,
-        numIter: 2500,
-        tile: true, // タイル配置を有効化
-        tilingPaddingVertical: 20,
-        tilingPaddingHorizontal: 20,
-        gravityRangeCompound: 1.5,
-        gravityCompound: 1.0,
-        gravityRange: 3.8,
-        initialEnergyOnIncremental: 0.3
-      },
+      layout: getLayoutOptions(),
       wheelSensitivity: 0.5, // 感度を上げてトラックパッドでのズームをしやすくする
       userZoomingEnabled: true,
       zoomingEnabled: true,
@@ -552,17 +678,42 @@ export default function CytoscapeChart({ mermaidCode }) {
       container.addEventListener('wheel', handleWheel, { passive: false });
     }
 
+    // エッジホバー時の理由ツールチップ表示
+    const handleEdgeMouseOver = (event) => {
+      const edge = event.target;
+      const reason = edge.data('reason');
+      if (!reason) return;
+      const fromLabel = edge.source().data('label') || edge.data('source');
+      const toLabel = edge.target().data('label') || edge.data('target');
+      setHoveredEdgeInfo({
+        fromLabel,
+        toLabel,
+        reason,
+      });
+    };
+
+    const handleEdgeMouseOut = () => {
+      setHoveredEdgeInfo(null);
+    };
+
+    cy.on('mouseover', 'edge', handleEdgeMouseOver);
+    cy.on('mouseout', 'edge', handleEdgeMouseOut);
+
     cyRef.current = cy;
     return () => {
       if (container) {
         container.removeEventListener('wheel', handleWheel);
       }
       if (cyRef.current) {
+        cyRef.current.off('mouseover', 'edge', handleEdgeMouseOver);
+        cyRef.current.off('mouseout', 'edge', handleEdgeMouseOut);
+      }
+      if (cyRef.current) {
         cyRef.current.destroy();
         cyRef.current = null;
       }
     };
-  }, [mermaidCode]);
+  }, [mermaidCode, graphData]);
 
   return (
     <div
@@ -579,7 +730,18 @@ export default function CytoscapeChart({ mermaidCode }) {
         WebkitFontSmoothing: 'antialiased',
         MozOsxFontSmoothing: 'grayscale'
       }}
-    />
+    >
+      {hoveredEdgeInfo && (
+        <div className="edge-reason-tooltip">
+          <div className="edge-reason-title">
+            依存関係: {hoveredEdgeInfo.fromLabel} → {hoveredEdgeInfo.toLabel}
+          </div>
+          <div className="edge-reason-body">
+            理由: {hoveredEdgeInfo.reason}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

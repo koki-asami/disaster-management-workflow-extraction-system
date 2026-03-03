@@ -3,16 +3,27 @@ import './UploadPdf.css';
 
 function UploadPdf({ onUpload, disabled }) {
   const fileInputRef = useRef(null);
-  const [fileName, setFileName] = useState(null);
+  const [fileNames, setFileNames] = useState([]);
+
+  const handleFiles = (fileList) => {
+    const files = Array.from(fileList || []).filter(
+      (file) => file.type === 'application/pdf'
+    );
+
+    if (files.length === 0 && fileList.length > 0) {
+      alert('PDFファイルのみアップロード可能です。');
+      return;
+    }
+
+    if (files.length > 0) {
+      setFileNames(files.map((f) => f.name));
+      onUpload(files);
+    }
+  };
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file && file.type === 'application/pdf') {
-      setFileName(file.name);
-      onUpload(file);
-    } else if (file) {
-      alert('PDFファイルのみアップロード可能です。');
-    }
+    if (disabled) return;
+    handleFiles(e.target.files);
   };
 
   const handleDragOver = (e) => {
@@ -22,23 +33,17 @@ function UploadPdf({ onUpload, disabled }) {
   const handleDrop = (e) => {
     e.preventDefault();
     if (disabled) return;
-
-    const file = e.dataTransfer.files[0];
-    if (file && file.type === 'application/pdf') {
-      setFileName(file.name);
-      console.log("Uploading file to OpenAI API: %s", file);
-      onUpload(file);
-    } else if (file) {
-      alert('PDFファイルのみアップロード可能です。');
-    }
+    handleFiles(e.dataTransfer.files);
   };
 
   const handleButtonClick = () => {
-    fileInputRef.current.click();
+    if (!disabled && fileInputRef.current) {
+      fileInputRef.current.click();
+    }
   };
 
   return (
-    <div 
+    <div
       className={`upload-container ${disabled ? 'disabled' : ''}`}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -48,22 +53,28 @@ function UploadPdf({ onUpload, disabled }) {
         <input
           type="file"
           accept=".pdf"
+          multiple
           onChange={handleFileChange}
           ref={fileInputRef}
           style={{ display: 'none' }}
           disabled={disabled}
         />
-        <button 
+        <button
           onClick={handleButtonClick}
           disabled={disabled}
           className="upload-button"
         >
-          PDFを選択
+          PDFを選択（複数可）
         </button>
         <p>または、ここにPDFファイルをドラッグ&ドロップ</p>
-        {fileName && (
+        {fileNames.length > 0 && (
           <div className="file-info">
-            <p>選択されたファイル: {fileName}</p>
+            <p>選択されたファイル:</p>
+            <ul>
+              {fileNames.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
           </div>
         )}
       </div>

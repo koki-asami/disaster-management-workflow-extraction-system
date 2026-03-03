@@ -1,68 +1,87 @@
 // APIエンドポイントを環境変数から取得するか、デフォルト値を使用
 export const API_ENDPOINT = process.env.REACT_APP_API_ENDPOINT || "http://localhost:8081";
 
-export async function analyzePdf(file) {
-  console.log(`Analyzing PDF: ${file.name}, size: ${file.size} bytes`);
-  
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        // Base64エンコードされたPDFデータを取得
-        const base64Data = reader.result.split(',')[1];
-        
-        console.log('Sending PDF data to backend for analysis');
-        
+export async function analyzePdf(filesInput) {
+  const files = Array.isArray(filesInput) ? filesInput : [filesInput];
+
+  if (!files || files.length === 0) {
+    throw new Error('解析対象のPDFファイルが指定されていません');
+  }
+
+  console.log(
+    `Analyzing ${files.length} PDF(s): ${files
+      .map((f) => `${f.name} (${f.size} bytes)`)
+      .join(', ')}`
+  );
+
+  // File を Base64 に変換するヘルパー
+  const readFileAsBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
         try {
-          // タイムアウト処理を追加
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 60000000); // 60秒タイムアウト
-          
-          const response = await fetch(`${API_ENDPOINT}/analyze_pdf`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ pdf_data: base64Data, filename: file.name }),
-            mode: 'cors',
-            credentials: 'omit',
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId); // タイムアウトをクリア
-          console.log('Received response from backend:', response);
-          
-          if (!response.ok) {
-            const errorText = await response.text();
-            let errorMessage = 'PDF解析に失敗しました';
-            try {
-              const errorData = JSON.parse(errorText);
-              errorMessage = errorData.error || errorMessage;
-            } catch (e) {
-              errorMessage = `${errorMessage}: ${errorText.substring(0, 100)}...`;
-            }
-            throw new Error(errorMessage);
+          const result = reader.result;
+          const base64Data = typeof result === 'string' ? result.split(',')[1] : null;
+          if (!base64Data) {
+            reject(new Error('ファイルのBase64変換に失敗しました'));
+            return;
           }
-          
-          const data = await response.json();
-          console.log('PDF analysis completed successfully');
-          resolve(data);
-        } catch (fetchError) {
-          if (fetchError.name === 'AbortError') {
-            reject(new Error('リクエストがタイムアウトしました。サーバーの応答がありません。'));
-          } else {
-            reject(fetchError);
-          }
+          resolve({ filename: file.name, pdf_data: base64Data });
+        } catch (e) {
+          reject(e);
         }
-      } catch (error) {
-        reject(error);
+      };
+      reader.onerror = () => {
+        reject(new Error('ファイルの読み込みに失敗しました'));
+      };
+      reader.readAsDataURL(file);
+    });
+
+  // すべてのファイルをBase64に変換
+  const payloadFiles = await Promise.all(files.map(readFileAsBase64));
+
+  console.log('Sending PDF data to backend for analysis');
+
+  // タイムアウト処理を追加
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000); // 600秒タイムアウト
+
+  try {
+    const response = await fetch(`${API_ENDPOINT}/analyze_pdf`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ files: payloadFiles }),
+      mode: 'cors',
+      credentials: 'omit',
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId); // タイムアウトをクリア
+    console.log('Received response from backend:', response);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = 'PDF解析に失敗しました';
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.error || errorMessage;
+      } catch (e) {
+        errorMessage = `${errorMessage}: ${errorText.substring(0, 100)}...`;
       }
-    };
-    reader.onerror = (error) => {
-      reject(new Error('ファイルの読み込みに失敗しました'));
-    };
-    reader.readAsDataURL(file);
-  });
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log('PDF analysis completed successfully');
+    return data;
+  } catch (fetchError) {
+    if (fetchError.name === 'AbortError') {
+      throw new Error('リクエストがタイムアウトしました。サーバーの応答がありません。');
+    }
+    throw fetchError;
+  }
 }
 
 export async function chatUpdate(history, message, fileId) {
@@ -120,6 +139,65 @@ export async function chatUpdate(history, message, fileId) {
     }
     throw error;
   }
+}
+
+// ===== Uploads API (S3 プリサイン付きアップロード用) =====
+
+export async function presignUpload(filename, contentType = 'application/pdf') {
+  const response = await fetch(`${API_ENDPOINT}/uploads/presign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, content_type: contentType }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`プリサインURLの取得に失敗しました: ${errorText}`);
+  }
+
+  return response.json(); // { upload_id, object_key, upload_url }
+}
+
+export async function completeUpload(uploadId, sizeBytes) {
+  const response = await fetch(`${API_ENDPOINT}/uploads/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ upload_id: uploadId, size_bytes: sizeBytes }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`アップロード完了の登録に失敗しました: ${errorText}`);
+  }
+
+  return response.json(); // { upload: {...} }
+}
+
+export async function fetchUploads() {
+  const response = await fetch(`${API_ENDPOINT}/uploads`, {
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`アップロード一覧の取得に失敗しました: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.uploads || [];
+}
+
+export async function deleteUpload(uploadId) {
+  const response = await fetch(`${API_ENDPOINT}/uploads/${encodeURIComponent(uploadId)}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`アップロードの削除に失敗しました: ${errorText}`);
+  }
+
+  return response.json();
 }
 
 // ヘルスチェック関数

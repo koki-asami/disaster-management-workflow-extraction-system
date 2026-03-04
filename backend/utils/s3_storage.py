@@ -1,4 +1,5 @@
 import boto3
+import json
 import os
 import uuid
 import base64
@@ -96,6 +97,37 @@ def get_chart_code(object_key: str) -> str:
         return response["Body"].read().decode("utf-8")
     except Exception as e:
         logger.error("Error getting chart code from S3: %s", str(e))
+        raise
+
+
+def upload_graph_data(graph_data: dict, location_name: str, chart_id: str | None = None) -> str:
+    """Upload graph_data JSON to S3 and return the object key."""
+    try:
+        create_bucket_if_not_exists()
+        suffix = f"{chart_id}" if chart_id else str(uuid.uuid4())
+        object_key = f"{location_name}/graph_data/{suffix}.json"
+        body = json.dumps(graph_data, ensure_ascii=False)
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=object_key,
+            Body=body,
+            ContentType="application/json",
+        )
+        logger.info("Graph data uploaded successfully to %s", object_key)
+        return object_key
+    except Exception as e:
+        logger.error("Error uploading graph data to S3: %s", str(e))
+        raise
+
+
+def get_graph_data(object_key: str) -> dict:
+    """Get graph_data JSON from S3."""
+    try:
+        response = s3.get_object(Bucket=BUCKET_NAME, Key=object_key)
+        body = response["Body"].read().decode("utf-8")
+        return json.loads(body)
+    except Exception as e:
+        logger.error("Error getting graph data from S3: %s", str(e))
         raise
 
 

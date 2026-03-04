@@ -1,9 +1,16 @@
 import boto3
+import json
 import os
 import uuid
 from datetime import datetime
 from utils.logger import get_logger
-from utils.s3_storage import get_pdf_url, upload_chart_code, get_chart_code
+from utils.s3_storage import (
+    get_pdf_url,
+    upload_chart_code,
+    get_chart_code,
+    upload_graph_data,
+    get_graph_data,
+)
 
 logger = get_logger(__name__)
 
@@ -12,6 +19,9 @@ dynamodb = boto3.resource("dynamodb")
 
 # Main flowchart table
 TABLE_NAME = os.environ.get("FLOWCHART_TABLE_NAME", "flowcharts")
+
+# DynamoDB item limit 400KB; keep graph_data inline only if under this (rest is chart_code, etc.)
+GRAPH_DATA_SIZE_THRESHOLD = 200 * 1024
 
 # Uploads / Jobs tables (plan-based; names chosen to stay within flowcharts* for IAM)
 UPLOADS_TABLE_NAME = os.environ.get("UPLOADS_TABLE_NAME", TABLE_NAME + "_uploads")
@@ -135,8 +145,19 @@ def save_flowchart(chart_code, location_type, location_name, title=None, chart_i
         if chart_object_key:
             item['chart_object_key'] = chart_object_key
         if graph_data is not None:
-            # tasks / dependencies などのJSONそのものを保存（400KB制限は chart_code のみを対象）
-            item['graph_data'] = graph_data
+            gd_serialized = json.dumps(graph_data, ensure_ascii=False)
+            if len(gd_serialized) > GRAPH_DATA_SIZE_THRESHOLD:
+                try:
+                    graph_data_s3_key = upload_graph_data(
+                        graph_data, location_name, chart_id=item["id"]
+                    )
+                    item["graph_data_s3_key"] = graph_data_s3_key
+                except Exception as e:
+                    error_msg = f"Error uploading graph_data to S3: {str(e)}"
+                    logger.error(error_msg)
+                    return False, error_msg, None
+            else:
+                item["graph_data"] = graph_data
 
         if chart_id:
             # Update existing flowchart
@@ -145,26 +166,36 @@ def save_flowchart(chart_code, location_type, location_name, title=None, chart_i
                     'SET location_type = :lt, location_name = :ln, chart_code = :cc, '
                     'updated_at = :ua, file_id = :fid'
                 )
-                if title:
-                    update_expr += ', title = :t'
-                if pdf_object_key:
-                    update_expr += ', pdf_object_key = :pok'
-                if chart_object_key:
-                    update_expr += ', chart_object_key = :cok'
-                if graph_data is not None:
-                    update_expr += ', graph_data = :gd'
-
                 expr_values = {
                     ':lt': location_type,
                     ':ln': location_name,
                     ':cc': chart_code,
                     ':ua': datetime.now().isoformat(),
                     ':fid': file_id,
-                    **({':t': title} if title else {}),
-                    **({':pok': pdf_object_key} if pdf_object_key else {}),
-                    **({':cok': chart_object_key} if chart_object_key else {}),
-                    **({':gd': graph_data} if graph_data is not None else {}),
                 }
+                if title:
+                    update_expr += ', title = :t'
+                    expr_values[':t'] = title
+                if pdf_object_key:
+                    update_expr += ', pdf_object_key = :pok'
+                    expr_values[':pok'] = pdf_object_key
+                if chart_object_key:
+                    update_expr += ', chart_object_key = :cok'
+                    expr_values[':cok'] = chart_object_key
+
+                if graph_data is not None:
+                    gd_serialized = json.dumps(graph_data, ensure_ascii=False)
+                    if len(gd_serialized) > GRAPH_DATA_SIZE_THRESHOLD:
+                        graph_data_s3_key = upload_graph_data(
+                            graph_data, location_name, chart_id=chart_id
+                        )
+                        update_expr += ', graph_data_s3_key = :gdk'
+                        expr_values[':gdk'] = graph_data_s3_key
+                        update_expr += ' REMOVE graph_data'
+                    else:
+                        update_expr += ', graph_data = :gd'
+                        expr_values[':gd'] = graph_data
+                        update_expr += ' REMOVE graph_data_s3_key'
 
                 response = table.update_item(
                     Key={'id': chart_id},
@@ -221,7 +252,15 @@ def get_flowchart(chart_id):
             except Exception as e:
                 logger.error(f"Error fetching chart code from S3: {str(e)}")
                 item['chart_code'] = None
-            
+
+        # If graph_data is stored in S3, fetch it
+        if 'graph_data_s3_key' in item:
+            try:
+                item['graph_data'] = get_graph_data(item['graph_data_s3_key'])
+            except Exception as e:
+                logger.error(f"Error fetching graph_data from S3: {str(e)}")
+                item['graph_data'] = None
+
         return item
     except Exception as e:
         logger.error(f"Error getting flowchart: {str(e)}")

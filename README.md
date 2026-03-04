@@ -1,5 +1,9 @@
 # Disaster Management Workflow Extraction System
 
+## システム概要
+
+![システム概要](image/Overview.png)
+
 ## 概要
 PDF資料から防災計画のワークフローを抽出し、可視化するシステムです。
 

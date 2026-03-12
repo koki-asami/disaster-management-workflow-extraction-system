@@ -60,9 +60,8 @@ jobs:
         run: |
           cd backend
           set -e
-          out=$(chalice deploy --stage $CHALICE_STAGE 2>&1)
-          echo "$out"
-          url=$(echo "$out" | grep "Rest API URL" | sed 's/.*Rest API URL: *//' | tr -d '\r' | sed 's|/$||')
+          chalice deploy --stage "$CHALICE_STAGE"
+          url=$(chalice url --stage "$CHALICE_STAGE" | tr -d '\r' | sed 's|/$||')
           if [ -z "$url" ]; then
             echo "::error::Could not get Rest API URL from chalice deploy output"
             exit 1

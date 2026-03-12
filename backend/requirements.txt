@@ -1,6 +1,6 @@
 chalice==1.29.0
 openai==1.65.5
-PyMuPDF
+pymupdf==1.27.2
 PyPDF2==3.0.1
 python-dotenv==1.0.0
 Pillow==11.0.0

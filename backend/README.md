@@ -26,17 +26,17 @@ $ uv run chalice local --port 8081 --no-autoreload
 
 ### AWS へデプロイする場合の Python バージョン
 
-`chalice deploy` は、**実行している Python のメジャー版**を Lambda のランタイムとして使います。AWS Lambda は 3.10 等をサポートしており、3.13 は未対応のため、デプロイ時に「closest supported version on AWS Lambda is python3.10」という警告が出ます。**Lambda で問題なく動かすには、デプロイ時は Python 3.10 で `chalice deploy` を実行してください。**
+`chalice deploy` は、**実行している Python のメジャー版**を Lambda のランタイムとして使います。**本プロジェクトは AWS では Python 3.11 を推奨**します（PyMuPDF などのネイティブ依存を含むため、Amazon Linux 2023 系ランタイムで動かすのが安全）。
 
-例（Python 3.10 の venv を作ってデプロイ）:
+例（Python 3.11 の venv を作ってデプロイ）:
 ```bash
-$ python3.10 -m venv .venv310
-$ source .venv310/bin/activate   # Windows: .venv310\Scripts\activate
+$ python3.11 -m venv .venv311
+$ source .venv311/bin/activate   # Windows: .venv311\Scripts\activate
 $ pip install -r requirements.txt chalice
 $ chalice deploy --stage dev
 ```
 
-CI/CD（GitHub Actions）では、ワークフロー側で Python 3.10 を指定しているため、そのままで問題ありません。
+CI/CD（GitHub Actions）では、ワークフロー側で Python 3.11 を指定しているため、そのままで問題ありません。
 
 ## AWS 上での非同期ジョブ実行について（未対応のインフラ作業）
 

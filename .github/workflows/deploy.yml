@@ -47,7 +47,6 @@ jobs:
           pip install chalice
 
       - name: Inject OpenAI API key into Chalice config
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
         run: |
           cd backend
           if [ -n "$OPENAI_API_KEY" ]; then

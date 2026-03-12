@@ -11,7 +11,10 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 import boto3
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF
+except ImportError:  # pragma: no cover - runtime guard
+    fitz = None
 import threading
 
 from chalicelib.utils.database import (
@@ -289,6 +292,10 @@ def _extract_text_by_page_from_s3(object_key: str) -> list[dict]:
 
     戻り値: [{ "page_index": int, "text": str }, ...]
     """
+    if fitz is None:
+        logger.error("PyMuPDF (fitz) is not available in this Lambda runtime")
+        raise RuntimeError("PyMuPDF (fitz) is not available in this Lambda runtime")
+
     logger.info("Downloading PDF from S3 for extraction: %s", object_key)
     resp = s3_client.get_object(Bucket=BUCKET_NAME, Key=object_key)
     pdf_bytes = resp["Body"].read()

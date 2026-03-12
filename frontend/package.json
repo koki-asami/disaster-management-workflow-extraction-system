@@ -21,7 +21,7 @@
         "react": "^18.2.0",
         "react-bootstrap": "^2.10.9",
         "react-dom": "^18.2.0",
-        "react-scripts": "^0.0.0",
+        "react-scripts": "5.0.1",
         "reactflow": "^11.11.4",
         "svg-pan-zoom": "^3.6.2",
         "web-vitals": "^2.1.4"
@@ -63,8 +63,6 @@
         "eslint": "^8.57.0"
     },
     "devDependencies": {
-        "@aws-amplify/backend": "^1.2.1",
-        "@aws-amplify/backend-cli": "^1.5.0",
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
     }
 }

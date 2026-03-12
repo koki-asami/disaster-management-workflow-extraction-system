@@ -5,9 +5,11 @@
     "dev": {
       "api_gateway_stage": "api",
       "region": "ap-northeast-1",
+      "lambda_timeout": 600,
       "environment_variables": {
-        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE",
+        "OPENAI_API_KEY": "",
         "FLOWCHART_TABLE_NAME": "flowcharts_dev",
+        "S3_BUCKET_NAME": "dmwe-pdfs-dev",
         "TASK_EXTRACTION_MODEL": "gpt-5.2",
         "DEPENDENCY_EXTRACTION_MODEL": "gpt-5.2",
         "CHAT_MODEL": "gpt-5.2"
@@ -33,9 +35,12 @@
     },
     "prod": {
       "api_gateway_stage": "api",
+      "region": "ap-northeast-1",
+      "lambda_timeout": 600,
       "environment_variables": {
-        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE",
+        "OPENAI_API_KEY": "",
         "FLOWCHART_TABLE_NAME": "flowcharts_prod",
+        "S3_BUCKET_NAME": "dmwe-pdfs-prod",
         "TASK_EXTRACTION_MODEL": "gpt-5.2",
         "DEPENDENCY_EXTRACTION_MODEL": "gpt-5.2",
         "CHAT_MODEL": "gpt-5.2"

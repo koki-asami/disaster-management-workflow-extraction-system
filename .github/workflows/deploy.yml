@@ -1,0 +1,132 @@
+# Deploy backend (Chalice) and frontend (React) to AWS.
+# - push to main -> deploy to dev
+# - push tag v* -> deploy to prod
+
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  backend:
+    name: Deploy backend (Chalice)
+    runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.deploy.outputs.api_url }}
+    env:
+      CHALICE_STAGE: ${{ github.ref == 'refs/heads/main' && 'dev' || 'prod' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install chalice
+
+      - name: Inject OpenAI API key into Chalice config
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: |
+          cd backend
+          if [ -n "$OPENAI_API_KEY" ]; then
+            sed -i.bak "s|YOUR_OPENAI_API_KEY_HERE|$OPENAI_API_KEY|g" .chalice/config.json
+          fi
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Deploy Chalice
+        id: deploy
+        run: |
+          cd backend
+          set -e
+          out=$(chalice deploy --stage $CHALICE_STAGE 2>&1)
+          echo "$out"
+          url=$(echo "$out" | grep "Rest API URL" | sed 's/.*Rest API URL: *//' | tr -d '\r' | sed 's|/$||')
+          if [ -z "$url" ]; then
+            echo "::error::Could not get Rest API URL from chalice deploy output"
+            exit 1
+          fi
+          echo "api_url=${url}" >> $GITHUB_OUTPUT
+        env:
+          CHALICE_STAGE: ${{ env.CHALICE_STAGE }}
+
+  frontend:
+    name: Deploy frontend (S3 + CloudFront)
+    needs: backend
+    runs-on: ubuntu-latest
+    env:
+      REACT_APP_API_ENDPOINT: ${{ needs.backend.outputs.api_url }}
+      FRONTEND_BUCKET: ${{ github.ref == 'refs/heads/main' && 'dmwe-frontend-dev' || 'dmwe-frontend-prod' }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ github.ref == 'refs/heads/main' && vars.CLOUDFRONT_DISTRIBUTION_ID_DEV || vars.CLOUDFRONT_DISTRIBUTION_ID_PROD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Ensure API endpoint is set
+        run: |
+          if [ -z "$REACT_APP_API_ENDPOINT" ]; then
+            echo "::error::REACT_APP_API_ENDPOINT is empty (backend may not have output api_url)"
+            exit 1
+          fi
+        env:
+          REACT_APP_API_ENDPOINT: ${{ needs.backend.outputs.api_url }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+        env:
+          REACT_APP_API_ENDPOINT: ${{ env.REACT_APP_API_ENDPOINT }}
+          CI: "false"
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync frontend/build s3://$FRONTEND_BUCKET --delete
+        env:
+          FRONTEND_BUCKET: ${{ env.FRONTEND_BUCKET }}
+
+      - name: Invalidate CloudFront cache
+        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}

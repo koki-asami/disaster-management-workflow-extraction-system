@@ -3,8 +3,8 @@ import json
 import os
 import uuid
 from datetime import datetime
-from utils.logger import get_logger
-from utils.s3_storage import (
+from chalicelib.utils.logger import get_logger
+from chalicelib.utils.s3_storage import (
     get_pdf_url,
     upload_chart_code,
     get_chart_code,

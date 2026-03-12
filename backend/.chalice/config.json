@@ -17,7 +17,6 @@
       "iam_policy_file": ["dynamodb_policy.json", "lambda_policy.json"],
       "packaging": {
         "include_paths": [
-          "utils/",
           "requirements.txt",
           ".env"
         ],

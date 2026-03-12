@@ -14,7 +14,7 @@ import boto3
 import fitz  # PyMuPDF
 import threading
 
-from utils.database import (
+from chalicelib.utils.database import (
     save_flowchart,
     get_flowchart,
     list_flowcharts,
@@ -30,8 +30,8 @@ from utils.database import (
     save_job_result,
     get_job,
 )
-from utils.s3_storage import create_presigned_upload_url, delete_object, BUCKET_NAME
-from utils.logger import get_logger
+from chalicelib.utils.s3_storage import create_presigned_upload_url, delete_object, BUCKET_NAME
+from chalicelib.utils.logger import get_logger
 
 
 # Load environment variables from .env file if it exists

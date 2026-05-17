@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "id": "t001",
+      "name": "Sample task",
+      "department": "危機管理課",
+      "evidence": [{ "source_quote": "避難所を開設する。" }]
+    }
+  ],
+  "dependencies": []
+}

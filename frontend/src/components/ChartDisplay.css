@@ -110,7 +110,7 @@
   margin-top: 4px;
 }
 
-/* Cytoscape 表示領域（CytoscapeChart側でも inline style を指定） */
+/* Legacy chart canvas area */
 .cyto-display {
   width: 100%;
   height: 800px;
@@ -138,24 +138,6 @@
   flex-direction: column;
   height: 800px;
   background-color: #f8f9fa;
-}
-
-.mermaid-editor {
-  flex: 1;
-  padding: 15px;
-  font-family: 'Courier New', monospace;
-  font-size: 14px;
-  line-height: 1.5;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  resize: none;
-  background-color: #ffffff;
-}
-
-.mermaid-editor:focus {
-  outline: none;
-  border-color: #4285f4;
-  box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
 }
 
 /* コントロールボタンのスタイル */
@@ -318,7 +300,7 @@
   cursor: not-allowed;
 }
 
-/* Cytoscape表示エリアのスタイル */
+/* Legacy chart canvas area */
 .cyto-display {
   width: 100%;
   height: 1000px;

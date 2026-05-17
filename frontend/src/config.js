@@ -1,5 +1,126 @@
-// APIエンドポイントを環境変数から取得するか、デフォルト値を使用
-export const API_ENDPOINT = process.env.REACT_APP_API_ENDPOINT || "http://localhost:8081";
+// API: FastAPI は /api/v1 プレフィックス。ヘルスはルート /health。
+const viteOrigin =
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_ORIGIN;
+const vitePrefix =
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_PREFIX;
+const viteEnv = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {};
+
+const CRA_ORIGIN = typeof process !== 'undefined' && process.env && process.env.REACT_APP_API_ORIGIN;
+const CRA_PREFIX =
+  typeof process !== 'undefined' && process.env && process.env.REACT_APP_API_PREFIX;
+
+const _defaultOrigin =
+  typeof window !== 'undefined' &&
+  typeof import.meta !== 'undefined' &&
+  import.meta.env &&
+  import.meta.env.DEV
+    ? ''
+    : 'http://localhost:8000';
+
+export const API_ORIGIN = String(viteOrigin || CRA_ORIGIN || _defaultOrigin).replace(/\/$/, '');
+export const API_PREFIX = String(vitePrefix || CRA_PREFIX || '/api/v1');
+const prefixNorm = API_PREFIX.startsWith('/') ? API_PREFIX : `/${API_PREFIX}`;
+export const API_ENDPOINT = `${API_ORIGIN}${prefixNorm}`.replace(/\/$/, '');
+
+const TOKEN_KEY = 'dmwe_access_token';
+const TOKEN_EXPIRES_AT_KEY = 'dmwe_access_token_expires_at';
+
+const cognitoDomainRaw = viteEnv.VITE_COGNITO_DOMAIN || '';
+const cognitoClientId = viteEnv.VITE_COGNITO_APP_CLIENT_ID || '';
+const cognitoRedirectUri = viteEnv.VITE_COGNITO_REDIRECT_URI || (
+  typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : ''
+);
+const cognitoLogoutUri = viteEnv.VITE_COGNITO_LOGOUT_URI || (
+  typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : ''
+);
+const authDisabled = String(viteEnv.VITE_AUTH_DISABLED || '').toLowerCase();
+export const FRONTEND_AUTH_DISABLED = ['1', 'true', 'yes'].includes(authDisabled);
+export const DEV_TOKEN_INPUT_ENABLED =
+  !!viteEnv.DEV || String(viteEnv.VITE_ENABLE_DEV_TOKEN || '').toLowerCase() === 'true';
+
+function cognitoDomain() {
+  if (!cognitoDomainRaw) return '';
+  return cognitoDomainRaw.startsWith('http')
+    ? cognitoDomainRaw.replace(/\/$/, '')
+    : `https://${cognitoDomainRaw}`.replace(/\/$/, '');
+}
+
+export function isCognitoConfigured() {
+  return !!cognitoDomain() && !!cognitoClientId && !!cognitoRedirectUri;
+}
+
+export function isAuthRequired() {
+  return !FRONTEND_AUTH_DISABLED && isCognitoConfigured();
+}
+
+export function getAccessToken() {
+  if (typeof window === 'undefined') return null;
+  const expiresAt = Number(window.sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY) || 0);
+  if (expiresAt && Date.now() >= expiresAt) {
+    setAccessToken(null);
+    return null;
+  }
+  return window.sessionStorage.getItem(TOKEN_KEY);
+}
+
+export function setAccessToken(token, expiresInSeconds = null) {
+  if (typeof window === 'undefined') return;
+  if (token) {
+    window.sessionStorage.setItem(TOKEN_KEY, token);
+    if (expiresInSeconds) {
+      window.sessionStorage.setItem(
+        TOKEN_EXPIRES_AT_KEY,
+        String(Date.now() + Number(expiresInSeconds) * 1000)
+      );
+    }
+  } else {
+    window.sessionStorage.removeItem(TOKEN_KEY);
+    window.sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+  }
+}
+
+export function authHeaders() {
+  const t = getAccessToken();
+  if (!t) return {};
+  return { Authorization: `Bearer ${t}` };
+}
+
+export function consumeCognitoRedirect() {
+  if (typeof window === 'undefined') return null;
+  const hash = window.location.hash?.startsWith('#')
+    ? window.location.hash.substring(1)
+    : '';
+  const params = new URLSearchParams(hash);
+  const token = params.get('access_token') || params.get('id_token');
+  if (!token) return null;
+  setAccessToken(token, params.get('expires_in'));
+  window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
+  return token;
+}
+
+export function redirectToCognitoLogin() {
+  if (!isCognitoConfigured()) {
+    throw new Error('Cognito Hosted UI is not configured');
+  }
+  const params = new URLSearchParams({
+    client_id: cognitoClientId,
+    response_type: 'token',
+    scope: 'openid email profile',
+    redirect_uri: cognitoRedirectUri,
+  });
+  window.location.assign(`${cognitoDomain()}/login?${params.toString()}`);
+}
+
+export function logoutFromCognito() {
+  const hadCognito = isCognitoConfigured();
+  setAccessToken(null);
+  if (!hadCognito || typeof window === 'undefined') return;
+  const params = new URLSearchParams({
+    client_id: cognitoClientId,
+    logout_uri: cognitoLogoutUri,
+  });
+  window.location.assign(`${cognitoDomain()}/logout?${params.toString()}`);
+}
 
 export async function analyzePdf(filesInput) {
   const files = Array.isArray(filesInput) ? filesInput : [filesInput];
@@ -8,13 +129,6 @@ export async function analyzePdf(filesInput) {
     throw new Error('解析対象のPDFファイルが指定されていません');
   }
 
-  console.log(
-    `Analyzing ${files.length} PDF(s): ${files
-      .map((f) => `${f.name} (${f.size} bytes)`)
-      .join(', ')}`
-  );
-
-  // File を Base64 に変換するヘルパー
   const readFileAsBase64 = (file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -37,20 +151,17 @@ export async function analyzePdf(filesInput) {
       reader.readAsDataURL(file);
     });
 
-  // すべてのファイルをBase64に変換
   const payloadFiles = await Promise.all(files.map(readFileAsBase64));
 
-  console.log('Sending PDF data to backend for analysis');
-
-  // タイムアウト処理を追加
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 600000); // 600秒タイムアウト
+  const timeoutId = setTimeout(() => controller.abort(), 600000);
 
   try {
     const response = await fetch(`${API_ENDPOINT}/analyze_pdf`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders(),
       },
       body: JSON.stringify({ files: payloadFiles }),
       mode: 'cors',
@@ -58,8 +169,7 @@ export async function analyzePdf(filesInput) {
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId); // タイムアウトをクリア
-    console.log('Received response from backend:', response);
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -73,9 +183,7 @@ export async function analyzePdf(filesInput) {
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
-    console.log('PDF analysis completed successfully');
-    return data;
+    return response.json();
   } catch (fetchError) {
     if (fetchError.name === 'AbortError') {
       throw new Error('リクエストがタイムアウトしました。サーバーの応答がありません。');
@@ -84,69 +192,53 @@ export async function analyzePdf(filesInput) {
   }
 }
 
-export async function chatUpdate(history, message, fileId) {
-  console.log(`Sending chat update with message: ${message.substring(0, 50)}...`);
-  
-  try {
-    // 履歴データを整形
-    const formattedHistory = history.map(entry => ({
-      role: entry.role,
-      content: entry.content,
-      chart: entry.chart || null
-    }));
+export async function chatUpdate(history, message, fileId, graphData = null) {
+  const formattedHistory = history.map((entry) => ({
+    role: entry.role,
+    content: entry.content,
+    chart: entry.chart || null,
+  }));
 
-    console.log('on chatUpdate, fileId:', fileId);
-    
-    const payload = {
-      instruction: message,
-      history: formattedHistory,
-      file_id: fileId
-    };
-    
-    // タイムアウト処理を追加
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 600000); // 60秒タイムアウト
-    
-    const response = await fetch(`${API_ENDPOINT}/chat_update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      mode: 'cors',
-      credentials: 'omit',
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId); // タイムアウトをクリア
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = 'チャット更新に失敗しました';
-      try {
-        const errorData = JSON.parse(errorText);
-        errorMessage = errorData.error || errorMessage;
-      } catch (e) {
-        errorMessage = `${errorMessage}: ${errorText.substring(0, 100)}...`;
-      }
-      throw new Error(errorMessage);
+  const payload = {
+    instruction: message,
+    history: formattedHistory,
+    file_id: fileId,
+    graph_data: graphData,
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000);
+
+  const response = await fetch(`${API_ENDPOINT}/chat_update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+    mode: 'cors',
+    credentials: 'omit',
+    signal: controller.signal,
+  });
+
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage = 'チャット更新に失敗しました';
+    try {
+      const errorData = JSON.parse(errorText);
+      errorMessage = errorData.error || errorMessage;
+    } catch (e) {
+      errorMessage = `${errorMessage}: ${errorText.substring(0, 100)}...`;
     }
-    
-    const data = await response.json();
-    console.log('Chat update completed successfully');
-    return data;
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('リクエストがタイムアウトしました。サーバーの応答がありません。');
-    }
-    throw error;
+    throw new Error(errorMessage);
   }
-}
 
-// ===== Uploads API (S3 プリサイン付きアップロード用) =====
+  return response.json();
+}
 
 export async function presignUpload(filename, contentType = 'application/pdf') {
   const response = await fetch(`${API_ENDPOINT}/uploads/presign`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ filename, content_type: contentType }),
   });
 
@@ -155,13 +247,13 @@ export async function presignUpload(filename, contentType = 'application/pdf') {
     throw new Error(`プリサインURLの取得に失敗しました: ${errorText}`);
   }
 
-  return response.json(); // { upload_id, object_key, upload_url }
+  return response.json();
 }
 
 export async function completeUpload(uploadId, sizeBytes) {
   const response = await fetch(`${API_ENDPOINT}/uploads/complete`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ upload_id: uploadId, size_bytes: sizeBytes }),
   });
 
@@ -170,12 +262,13 @@ export async function completeUpload(uploadId, sizeBytes) {
     throw new Error(`アップロード完了の登録に失敗しました: ${errorText}`);
   }
 
-  return response.json(); // { upload: {...} }
+  return response.json();
 }
 
 export async function fetchUploads() {
   const response = await fetch(`${API_ENDPOINT}/uploads`, {
     method: 'GET',
+    headers: { ...authHeaders() },
   });
 
   if (!response.ok) {
@@ -190,6 +283,7 @@ export async function fetchUploads() {
 export async function deleteUpload(uploadId) {
   const response = await fetch(`${API_ENDPOINT}/uploads/${encodeURIComponent(uploadId)}`, {
     method: 'DELETE',
+    headers: { ...authHeaders() },
   });
 
   if (!response.ok) {
@@ -200,12 +294,10 @@ export async function deleteUpload(uploadId) {
   return response.json();
 }
 
-// ===== 抽出ジョブ API =====
-
 export async function createExtractionJob(uploadIds) {
   const response = await fetch(`${API_ENDPOINT}/extractions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ upload_ids: uploadIds }),
   });
 
@@ -214,12 +306,13 @@ export async function createExtractionJob(uploadIds) {
     throw new Error(`抽出ジョブの作成に失敗しました: ${errorText}`);
   }
 
-  return response.json(); // { job_id, status }
+  return response.json();
 }
 
 export async function getExtractionJob(jobId) {
   const response = await fetch(`${API_ENDPOINT}/extractions/${encodeURIComponent(jobId)}`, {
     method: 'GET',
+    headers: { ...authHeaders() },
   });
 
   if (!response.ok) {
@@ -227,52 +320,74 @@ export async function getExtractionJob(jobId) {
     throw new Error(`抽出ジョブ情報の取得に失敗しました: ${errorText}`);
   }
 
-  return response.json(); // { job_id, status, progress, processed_pages, total_pages, summary, result? }
+  return response.json();
 }
 
-// ヘルスチェック関数
+export async function cancelExtractionJob(jobId) {
+  const response = await fetch(`${API_ENDPOINT}/extractions/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`キャンセルに失敗しました: ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function diagnoseWorkflow(graphData) {
+  const response = await fetch(`${API_ENDPOINT}/plan/diagnose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ graph_data: graphData || {} }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`分析の実行に失敗しました: ${errorText}`);
+  }
+
+  return response.json();
+}
+
 export async function checkBackendHealth() {
   try {
-    // タイムアウト処理を追加
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒タイムアウト
-    
-    const response = await fetch(`${API_ENDPOINT}/health`, {
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(`${API_ORIGIN}/health`, {
       method: 'GET',
       mode: 'cors',
       credentials: 'omit',
-      signal: controller.signal
+      signal: controller.signal,
     });
-    
-    clearTimeout(timeoutId); // タイムアウトをクリア
-    
+
+    clearTimeout(timeoutId);
+
     if (!response.ok) {
-      return { 
-        status: 'error', 
-        message: `バックエンドサーバーからエラーレスポンス: ${response.status} ${response.statusText}` 
+      return {
+        status: 'error',
+        message: `バックエンドサーバーからエラーレスポンス: ${response.status} ${response.statusText}`,
       };
     }
-    
+
     const data = await response.json();
     return { status: 'ok', message: 'バックエンドサーバーに接続できました', data };
   } catch (error) {
     if (error.name === 'AbortError') {
-      return { 
-        status: 'error', 
-        message: 'バックエンドサーバーへの接続がタイムアウトしました' 
-      };
-    } 
-    else {
-      return { 
-        status: 'error', 
-        message: `バックエンドサーバーに接続できません: ${error.message}` 
+      return {
+        status: 'error',
+        message: 'バックエンドサーバーへの接続がタイムアウトしました',
       };
     }
+    return {
+      status: 'error',
+      message: `バックエンドサーバーに接続できません: ${error.message}`,
+    };
   }
 }
 
-// Save flowchart to database
-// graphData には { tasks, dependencies } などのJSONをそのまま渡す
 export const saveFlowchart = async (
   chartCode,
   locationType,
@@ -282,96 +397,73 @@ export const saveFlowchart = async (
   fileId = null,
   graphData = null
 ) => {
-  try {
-    const response = await fetch(`${API_ENDPOINT}/save_flowchart`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        chart_code: chartCode,
-        location_type: locationType,
-        location_name: locationName,
-        title: title,
-        chart_id: chartId,
-        file_id: fileId,
-        graph_data: graphData,
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to save flowchart');
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error saving flowchart:', error);
-    throw error;
+  const response = await fetch(`${API_ENDPOINT}/save_flowchart`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      chart_code: chartCode,
+      location_type: locationType,
+      location_name: locationName,
+      title: title,
+      chart_id: chartId,
+      file_id: fileId,
+      graph_data: graphData,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to save flowchart');
   }
+
+  return response.json();
 };
 
-// List all flowcharts
 export const listFlowcharts = async (locationType = null, locationName = null) => {
-  try {
-    let url = `${API_ENDPOINT}/list_flowcharts`;
-    
-    // Add query parameters if provided
-    const params = new URLSearchParams();
-    if (locationType) params.append('location_type', locationType);
-    if (locationName) params.append('location_name', locationName);
-    
-    // Append params to URL if any exist
-    const queryString = params.toString();
-    if (queryString) url += `?${queryString}`;
-    
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to fetch flowcharts');
-    }
-    
-    const data = await response.json();
-    return data.flowcharts || [];
-  } catch (error) {
-    console.error('Error listing flowcharts:', error);
-    throw error;
+  let url = `${API_ENDPOINT}/list_flowcharts`;
+  const params = new URLSearchParams();
+  if (locationType) params.append('location_type', locationType);
+  if (locationName) params.append('location_name', locationName);
+  const queryString = params.toString();
+  if (queryString) url += `?${queryString}`;
+
+  const response = await fetch(url, { headers: { ...authHeaders() } });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to fetch flowcharts');
   }
+
+  const data = await response.json();
+  return data.flowcharts || [];
 };
 
-// Get a specific flowchart by ID
 export const getFlowchart = async (chartId) => {
-  try {
-    const response = await fetch(`${API_ENDPOINT}/get_flowchart/${chartId}`);
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to fetch flowchart');
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error getting flowchart:', error);
-    throw error;
+  const response = await fetch(`${API_ENDPOINT}/get_flowchart/${chartId}`, {
+    headers: { ...authHeaders() },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to fetch flowchart');
   }
+
+  return response.json();
 };
 
-// フローチャートを削除する関数
 export const deleteFlowchart = async (chartId) => {
-  try {
-    const response = await fetch(`${API_ENDPOINT}/delete_flowchart/${chartId}`, {
-      method: 'DELETE',
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to delete flowchart');
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error deleting flowchart:', error);
-    throw error;
+  const response = await fetch(`${API_ENDPOINT}/delete_flowchart/${chartId}`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to delete flowchart');
   }
+
+  return response.json();
 };

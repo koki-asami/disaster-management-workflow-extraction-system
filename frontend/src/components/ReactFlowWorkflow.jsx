@@ -6,6 +6,7 @@ import ReactFlow, {
   MarkerType,
   MiniMap,
   Panel,
+  Position,
   ReactFlowProvider,
   useReactFlow,
   useEdgesState,
@@ -44,6 +45,10 @@ const stableEdgeLabelProps = {
   labelBgStyle: stableEdgeLabelBgStyle,
   labelBgPadding: [6, 3],
   labelBgBorderRadius: 4,
+};
+const sideConnectedNodeProps = {
+  sourcePosition: Position.Right,
+  targetPosition: Position.Left,
 };
 
 const palette = [
@@ -465,6 +470,7 @@ export function graphDataToGroupedFlow(graphData) {
     return {
       id: group.id,
       type: 'default',
+      ...sideConnectedNodeProps,
       data: {
         kind: 'group',
         groupKey: group.key,
@@ -519,6 +525,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
   const taskNodes = filteredTasks.map((task) => ({
     id: String(task.id),
     type: 'default',
+    ...sideConnectedNodeProps,
       data: {
         kind: 'task',
         label: taskLabel(task),
@@ -609,6 +616,7 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
     return {
       id: String(task.id),
       type: 'default',
+      ...sideConnectedNodeProps,
       data: { kind: 'task', label: taskLabel(task), task, color },
       position: { x: 0, y: 0 },
       style: nodeStyle('task', color, highlighted),

@@ -28,6 +28,22 @@ const nodeWidth = 220;
 const nodeHeight = 62;
 const dependencyEdgeType = 'default';
 const unknownDepartmentLabel = '担当部署不明';
+const stableEdgeLabelStyle = {
+  fill: '#475569',
+  fontSize: 12,
+  fontWeight: 700,
+  pointerEvents: 'none',
+};
+const stableEdgeLabelBgStyle = {
+  fill: 'rgba(255,255,255,0.92)',
+};
+const stableEdgeLabelProps = {
+  labelStyle: stableEdgeLabelStyle,
+  labelShowBg: true,
+  labelBgStyle: stableEdgeLabelBgStyle,
+  labelBgPadding: [6, 3],
+  labelBgBorderRadius: 4,
+};
 
 const palette = [
   { bg: '#ecfdf5', border: '#0f766e', text: '#134e4a', area: 'rgba(15, 118, 110, 0.08)' },
@@ -471,7 +487,7 @@ export function graphDataToGroupedFlow(graphData) {
       label: `${rollup.dependencies.length}件${typeSummary ? ` ${typeSummary}` : ''}`,
       markerEnd: { type: MarkerType.ArrowClosed },
       style: edgeStyle(false),
-      labelStyle: { fill: '#475569', fontWeight: 700 },
+      ...stableEdgeLabelProps,
       data: { kind: 'group-edge', rollup, deps: rollup.dependencies.map((item) => item.dep) },
     };
   });
@@ -518,6 +534,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
       label: dependencyTypeLabels[dep.dependency_type] || '',
       markerEnd: { type: MarkerType.ArrowClosed },
       style: edgeStyle(false),
+      ...stableEdgeLabelProps,
       data: { kind: 'task-edge', dep },
     }));
 
@@ -685,12 +702,6 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
     return {
       ...edge,
       style: edgeStyle(active),
-      labelStyle: {
-        ...(edge.labelStyle || {}),
-        fill: active ? '#0f172a' : '#64748b',
-        fontWeight: active ? 800 : 700,
-      },
-      zIndex: active ? 5 : edge.zIndex,
     };
   });
 
@@ -708,6 +719,11 @@ function WorkflowCanvas({ graphData }) {
   const [diagnosisError, setDiagnosisError] = useState('');
   const [highlightedFindingIndex, setHighlightedFindingIndex] = useState(0);
   const [focusedNode, setFocusedNode] = useState(null);
+  const focusNode = useCallback((node) => {
+    const nodeId = node?.id ? String(node.id) : null;
+    if (!nodeId) return;
+    setFocusedNode((current) => (current?.id === nodeId ? current : { id: nodeId }));
+  }, []);
 
   const findings = diagnosis?.quality_findings || graphData?.quality_findings || [];
   const highlightedTaskIds = selectedTaskIdsFromFinding(findings, highlightedFindingIndex);
@@ -801,7 +817,7 @@ function WorkflowCanvas({ graphData }) {
   };
 
   const onNodeClick = useCallback((_, node) => {
-    setFocusedNode(node);
+    focusNode(node);
     if (node.data?.kind === 'group') {
       setViewMode('detail');
       setSelectedGroupKey(node.data.groupKey);
@@ -812,13 +828,13 @@ function WorkflowCanvas({ graphData }) {
     if (node.data?.kind === 'task') {
       setSelected({ type: 'task', payload: node.data?.task });
     }
-  }, []);
+  }, [focusNode]);
 
   const onNodeMouseEnter = useCallback((_, node) => {
     if (node.data?.kind === 'task' || node.data?.kind === 'group') {
-      setFocusedNode(node);
+      focusNode(node);
     }
-  }, []);
+  }, [focusNode]);
 
   const onEdgeClick = useCallback((_, edge) => {
     if (edge.data?.kind === 'group-edge') {

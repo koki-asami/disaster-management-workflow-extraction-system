@@ -1,8 +1,10 @@
 import dagre from 'dagre';
 import React, { useCallback, useMemo, useState } from 'react';
 import ReactFlow, {
+  BaseEdge,
   Background,
   Controls,
+  getBezierPath,
   MarkerType,
   MiniMap,
   Panel,
@@ -11,6 +13,7 @@ import ReactFlow, {
   useReactFlow,
   useEdgesState,
   useNodesState,
+  useStore,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { diagnoseWorkflow } from '../config.js';
@@ -27,7 +30,7 @@ import {
 
 const nodeWidth = 220;
 const nodeHeight = 62;
-const dependencyEdgeType = 'default';
+const dependencyEdgeType = 'workflowDependency';
 const unknownDepartmentLabel = '担当部署不明';
 const inactiveEdgeColor = '#94a3b8';
 const stableEdgeLabelStyle = {
@@ -45,10 +48,6 @@ const stableEdgeLabelProps = {
   labelBgStyle: stableEdgeLabelBgStyle,
   labelBgPadding: [6, 3],
   labelBgBorderRadius: 4,
-};
-const sideConnectedNodeProps = {
-  sourcePosition: Position.Right,
-  targetPosition: Position.Left,
 };
 
 const palette = [
@@ -133,6 +132,108 @@ function edgeStyle(active = false, activeColor = '#334155') {
     strokeWidth: active ? 3 : 1.5,
     opacity: active ? 1 : 0.58,
   };
+}
+
+function nodeBox(node, fallbackX, fallbackY) {
+  const width = node?.width || node?.measured?.width || nodeWidth;
+  const height = node?.height || node?.measured?.height || nodeHeight;
+  const left = node?.positionAbsolute?.x ?? node?.position?.x ?? fallbackX - width / 2;
+  const top = node?.positionAbsolute?.y ?? node?.position?.y ?? fallbackY - height / 2;
+  return {
+    left,
+    top,
+    width,
+    height,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
+  };
+}
+
+function WorkflowDependencyEdge({
+  id,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  markerEnd,
+  markerStart,
+  style,
+  label,
+  labelStyle,
+  labelShowBg,
+  labelBgStyle,
+  labelBgPadding,
+  labelBgBorderRadius,
+  interactionWidth,
+}) {
+  const sourceNode = useStore(
+    useCallback(
+      (store) => store.nodeInternals.get(source),
+      [source]
+    )
+  );
+  const targetNode = useStore(
+    useCallback(
+      (store) => store.nodeInternals.get(target),
+      [target]
+    )
+  );
+  const sourceBox = nodeBox(sourceNode, sourceX, sourceY);
+  const targetBox = nodeBox(targetNode, targetX, targetY);
+  const isVertical =
+    Math.abs(targetBox.centerY - sourceBox.centerY) >
+    Math.abs(targetBox.centerX - sourceBox.centerX);
+  const sourcePosition = isVertical ? Position.Left : Position.Right;
+  const targetPosition = Position.Left;
+  const edgeSourceX = isVertical ? sourceBox.left : sourceBox.left + sourceBox.width;
+  const edgeSourceY = sourceBox.centerY;
+  const edgeTargetX = targetBox.left;
+  const edgeTargetY = targetBox.centerY;
+  const [path, labelX, labelY] = getBezierPath({
+    sourceX: edgeSourceX,
+    sourceY: edgeSourceY,
+    sourcePosition,
+    targetX: edgeTargetX,
+    targetY: edgeTargetY,
+    targetPosition,
+  });
+
+  return (
+    <BaseEdge
+      id={id}
+      path={path}
+      labelX={labelX}
+      labelY={labelY}
+      label={label}
+      labelStyle={labelStyle}
+      labelShowBg={labelShowBg}
+      labelBgStyle={labelBgStyle}
+      labelBgPadding={labelBgPadding}
+      labelBgBorderRadius={labelBgBorderRadius}
+      style={style}
+      markerEnd={markerEnd}
+      markerStart={markerStart}
+      interactionWidth={interactionWidth}
+    />
+  );
+}
+
+const workflowEdgeTypes = {
+  [dependencyEdgeType]: WorkflowDependencyEdge,
+};
+
+function markMutualDependencies(edges) {
+  const edgePairs = new Set(edges.map((edge) => `${edge.source}->${edge.target}`));
+  return edges.map((edge) => {
+    const hasReverse = edgePairs.has(`${edge.target}->${edge.source}`);
+    if (!hasReverse) return edge;
+    return {
+      ...edge,
+      markerStart: edgeMarker(),
+    };
+  });
 }
 
 function dependencyRanks(nodes, edges) {
@@ -470,7 +571,6 @@ export function graphDataToGroupedFlow(graphData) {
     return {
       id: group.id,
       type: 'default',
-      ...sideConnectedNodeProps,
       data: {
         kind: 'group',
         groupKey: group.key,
@@ -491,7 +591,7 @@ export function graphDataToGroupedFlow(graphData) {
     };
   });
 
-  const edges = overview.overviewEdges.map((rollup) => {
+  const edges = markMutualDependencies(overview.overviewEdges.map((rollup) => {
     const typeSummary = edgeTypeSummary(rollup.dependencyTypes);
     return {
       id: rollup.id,
@@ -504,7 +604,7 @@ export function graphDataToGroupedFlow(graphData) {
       ...stableEdgeLabelProps,
       data: { kind: 'group-edge', rollup, deps: rollup.dependencies.map((item) => item.dep) },
     };
-  });
+  }));
 
   return {
     nodes: layoutOverviewByPhase(nodes, edges, overview.phases),
@@ -525,7 +625,6 @@ export function graphDataToDetailFlow(graphData, groupKey) {
   const taskNodes = filteredTasks.map((task) => ({
     id: String(task.id),
     type: 'default',
-    ...sideConnectedNodeProps,
       data: {
         kind: 'task',
         label: taskLabel(task),
@@ -538,7 +637,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
     zIndex: 2,
   }));
 
-  const edges = overview.normalizedDependencies
+  const edges = markMutualDependencies(overview.normalizedDependencies
     .map((dep, index) => ({ dep, endpoints: dependencyEndpoints(dep), index }))
     .filter(({ endpoints }) => endpoints && taskIds.has(endpoints.from) && taskIds.has(endpoints.to))
     .map(({ dep, endpoints, index }) => ({
@@ -551,7 +650,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
       style: edgeStyle(false),
       ...stableEdgeLabelProps,
       data: { kind: 'task-edge', dep },
-    }));
+    })));
 
   const layout = layoutByTimelineAndDepartment(taskNodes, edges, {
     laneOfNode: (node) => laneInfoForTask(node.data?.task, graphData),
@@ -616,14 +715,13 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
     return {
       id: String(task.id),
       type: 'default',
-      ...sideConnectedNodeProps,
       data: { kind: 'task', label: taskLabel(task), task, color },
       position: { x: 0, y: 0 },
       style: nodeStyle('task', color, highlighted),
       zIndex: highlighted ? 3 : 2,
     };
   });
-  const edges = workflow.dependencies
+  const edges = markMutualDependencies(workflow.dependencies
     .map((dep, index) => ({ dep, endpoints: dependencyEndpoints(dep), index }))
     .filter(({ endpoints }) => endpoints && taskIds.has(endpoints.from) && taskIds.has(endpoints.to))
     .map(({ dep, endpoints, index }) => ({
@@ -634,7 +732,7 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
       markerEnd: edgeMarker(),
       style: edgeStyle(false),
       data: { kind: 'task-edge', dep },
-  }));
+  })));
 
   if (nodes.length > 80) {
     const laidNodes = layoutWithDagre(nodes, edges);
@@ -730,6 +828,9 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
       ...edge,
       style: edgeStyle(active, activeColor),
       markerEnd: edgeMarker(active ? activeColor : inactiveEdgeColor),
+      markerStart: edge.markerStart
+        ? edgeMarker(active ? activeColor : inactiveEdgeColor)
+        : edge.markerStart,
       zIndex: active ? 16 : edge.zIndex,
     };
   });
@@ -886,6 +987,7 @@ function WorkflowCanvas({ graphData }) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        edgeTypes={workflowEdgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}

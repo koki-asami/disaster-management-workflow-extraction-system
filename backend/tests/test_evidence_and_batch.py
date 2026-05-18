@@ -91,3 +91,42 @@ def _assert_strict_objects(schema):
 def test_batch_json_schemas_are_strict_objects():
     _assert_strict_objects(TASKS_ROOT_JSON_SCHEMA)
     _assert_strict_objects(DEPENDENCIES_ROOT_JSON_SCHEMA)
+
+
+def test_dependency_prompt_payloads_are_compact(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    from dmwe_core.workers import pdf_extraction_worker as worker
+
+    huge_quote = "根拠" * 3000
+    task = {
+        "id": "t001",
+        "name": "避難所を開設する",
+        "canonical_name": "避難所の開設",
+        "phase": "emergency_response",
+        "workstream": "evacuation",
+        "category": "避難対策",
+        "department": "市町村 防災課",
+        "actor": {
+            "org_level": "municipality",
+            "org_name_normalized": "市町村",
+            "department_normalized": "防災課",
+        },
+        "action": "open",
+        "object": "避難所",
+        "scope": "指定避難所を開設する" * 200,
+        "description": "避難所を開設し避難者を受け入れる" * 300,
+        "context_snippets": ["避難所を開設する" * 200],
+        "evidence": [{"source_quote": huge_quote}],
+    }
+
+    registry = worker._dependency_registry_payload([task])
+    chunk = worker._dependency_chunk_payload([task])
+    registry_text = json.dumps(registry, ensure_ascii=False)
+    chunk_text = json.dumps(chunk, ensure_ascii=False)
+
+    assert "evidence" not in registry["tasks"][0]
+    assert huge_quote not in registry_text
+    assert huge_quote not in chunk_text
+    assert len(registry["tasks"][0]["scope"]) <= worker.DEPENDENCY_REGISTRY_SCOPE_CHARS + 3
+    assert len(chunk["tasks"][0]["description"]) <= worker.DEPENDENCY_CHUNK_DESCRIPTION_CHARS + 3
+    assert len(chunk["tasks"][0]["evidence_quotes"][0]) <= worker.DEPENDENCY_CHUNK_EVIDENCE_CHARS + 3

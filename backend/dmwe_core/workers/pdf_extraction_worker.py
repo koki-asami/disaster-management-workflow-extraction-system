@@ -49,6 +49,13 @@ MAX_CHARS_PER_PAGE = 5000
 TASKS_PER_DEPENDENCY_CHUNK = 80
 DEPENDENCY_CHUNK_OVERLAP = 20
 
+# 依存抽出用プロンプトは、保存用の詳細タスクから必要最小限だけを渡す。
+# evidence をそのまま全件渡すと大規模計画で Batch の context limit を超える。
+DEPENDENCY_REGISTRY_SCOPE_CHARS = 120
+DEPENDENCY_CHUNK_DESCRIPTION_CHARS = 220
+DEPENDENCY_CHUNK_EVIDENCE_CHARS = 180
+DEPENDENCY_CHUNK_SNIPPET_CHARS = 160
+
 
 def _extraction_mode() -> str:
     mode = os.environ.get("EXTRACTION_MODE", "batch").lower().strip()
@@ -194,6 +201,105 @@ def _dependency_chunks(tasks: list[dict]) -> list[list[dict]]:
             break
         start += step
     return chunks
+
+
+def _truncate_text(value: object, max_chars: int) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
+def _compact_actor(task: dict) -> dict:
+    actor = task.get("actor") if isinstance(task.get("actor"), dict) else {}
+    return {
+        "org_level": actor.get("org_level") or "",
+        "org_name_normalized": actor.get("org_name_normalized") or "",
+        "department_normalized": actor.get("department_normalized")
+        or task.get("department")
+        or "",
+    }
+
+
+def _first_text_items(value: object, *, limit: int, max_chars: int) -> list[str]:
+    items = value if isinstance(value, list) else ([value] if value else [])
+    output: list[str] = []
+    for item in items:
+        text = _truncate_text(item, max_chars)
+        if text:
+            output.append(text)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _evidence_quotes(task: dict, *, limit: int = 1) -> list[str]:
+    evidence = task.get("evidence") or []
+    if isinstance(evidence, dict):
+        evidence = [evidence]
+    quotes = []
+    for ev in evidence:
+        if not isinstance(ev, dict):
+            continue
+        quote = _truncate_text(ev.get("source_quote"), DEPENDENCY_CHUNK_EVIDENCE_CHARS)
+        if quote:
+            quotes.append(quote)
+        if len(quotes) >= limit:
+            break
+    return quotes
+
+
+def _compact_dependency_task(task: dict, *, include_context: bool) -> dict:
+    compact = {
+        "id": task.get("id"),
+        "name": _truncate_text(task.get("name"), 80),
+        "canonical_name": _truncate_text(task.get("canonical_name"), 80),
+        "phase": task.get("phase") or "",
+        "workstream": task.get("workstream") or "",
+        "category": _truncate_text(task.get("category"), 80),
+        "department": _truncate_text(task.get("department"), 80),
+        "actor": _compact_actor(task),
+        "action": _truncate_text(task.get("action"), 40),
+        "object": _truncate_text(task.get("object"), 60),
+        "scope": _truncate_text(task.get("scope") or task.get("description"), DEPENDENCY_REGISTRY_SCOPE_CHARS),
+    }
+    if include_context:
+        compact.update(
+            {
+                "description": _truncate_text(
+                    task.get("description"), DEPENDENCY_CHUNK_DESCRIPTION_CHARS
+                ),
+                "source_pdf": _truncate_text(task.get("source_pdf"), 80),
+                "page_range": _truncate_text(task.get("page_range"), 30),
+                "context_snippets": _first_text_items(
+                    task.get("context_snippets"),
+                    limit=1,
+                    max_chars=DEPENDENCY_CHUNK_SNIPPET_CHARS,
+                ),
+                "evidence_quotes": _evidence_quotes(task, limit=1),
+            }
+        )
+    return compact
+
+
+def _dependency_registry_payload(tasks: list[dict]) -> dict:
+    return {
+        "tasks": [
+            _compact_dependency_task(task, include_context=False)
+            for task in tasks
+            if task.get("id")
+        ]
+    }
+
+
+def _dependency_chunk_payload(chunk_tasks: list[dict]) -> dict:
+    return {
+        "tasks": [
+            _compact_dependency_task(task, include_context=True)
+            for task in chunk_tasks
+            if task.get("id")
+        ]
+    }
 
 
 def _merge_dependencies(raw_dependencies: list[dict], tasks: list[dict]) -> list[dict]:
@@ -524,38 +630,19 @@ def _run_batch_extraction_and_save(
         return
 
     dep_chunks = _dependency_chunks(tasks)
-    full_task_registry = json.dumps(
-        {
-            "tasks": [
-                {
-                    "id": x.get("id"),
-                    "name": x.get("name"),
-                    "canonical_name": x.get("canonical_name"),
-                    "phase": x.get("phase"),
-                    "workstream": x.get("workstream"),
-                    "category": x.get("category"),
-                    "department": x.get("department"),
-                    "actor": x.get("actor"),
-                    "action": x.get("action"),
-                    "object": x.get("object"),
-                    "scope": x.get("scope"),
-                    "evidence": (x.get("evidence") or [])[:3],
-                }
-                for x in tasks
-            ]
-        },
-        ensure_ascii=False,
-    )
+    full_task_registry = json.dumps(_dependency_registry_payload(tasks), ensure_ascii=False)
     dep_prompt_base = load_prompt("dependency_extraction")
     dep_lines: list[str] = []
     for dep_idx, chunk_tasks in enumerate(dep_chunks):
-        tasks_json_text = json.dumps({"tasks": chunk_tasks}, ensure_ascii=False)
+        tasks_json_text = json.dumps(
+            _dependency_chunk_payload(chunk_tasks), ensure_ascii=False
+        )
         system_prompt = f"""対象となるPDFファイル: {file_names_str}
 
-### 全文書タスクレジストリ（章横断・別チャンクのタスク ID 参照用）
+### 全文書タスクレジストリ（圧縮版・章横断/別チャンクのタスク ID 参照用）
 {full_task_registry}
 
-### 依存抽出対象タスク部分集合(JSON)（{dep_idx + 1}/{len(dep_chunks)}）
+### 依存抽出対象タスク部分集合(JSON・短い根拠抜粋付き)（{dep_idx + 1}/{len(dep_chunks)}）
 {tasks_json_text}
 
 {dep_prompt_base}
@@ -972,28 +1059,7 @@ def extraction_worker(event, context):
 
             all_dependencies: list[dict] = []
 
-            full_task_registry = json.dumps(
-                {
-                    "tasks": [
-                        {
-                            "id": x.get("id"),
-                            "name": x.get("name"),
-                            "canonical_name": x.get("canonical_name"),
-                            "phase": x.get("phase"),
-                            "workstream": x.get("workstream"),
-                            "category": x.get("category"),
-                            "department": x.get("department"),
-                            "actor": x.get("actor"),
-                            "action": x.get("action"),
-                            "object": x.get("object"),
-                            "scope": x.get("scope"),
-                            "evidence": (x.get("evidence") or [])[:3],
-                        }
-                        for x in tasks
-                    ]
-                },
-                ensure_ascii=False,
-            )
+            full_task_registry = json.dumps(_dependency_registry_payload(tasks), ensure_ascii=False)
             dep_extraction_aborted = False
             dependency_prompt_base = load_prompt("dependency_extraction")
 
@@ -1012,13 +1078,15 @@ def extraction_worker(event, context):
                     phase_total=num_dep_chunks,
                 )
 
-                tasks_json_text = json.dumps({"tasks": chunk_tasks}, ensure_ascii=False)
+                tasks_json_text = json.dumps(
+                    _dependency_chunk_payload(chunk_tasks), ensure_ascii=False
+                )
                 dependency_system_prompt = f"""対象となるPDFファイル: {file_names_str}
 
-### 全文書タスクレジストリ（章横断・別チャンクのタスク ID 参照用）
+### 全文書タスクレジストリ（圧縮版・章横断/別チャンクのタスク ID 参照用）
 {full_task_registry}
 
-### 依存抽出対象タスク部分集合(JSON)（{dep_idx + 1}/{num_dep_chunks}）
+### 依存抽出対象タスク部分集合(JSON・短い根拠抜粋付き)（{dep_idx + 1}/{num_dep_chunks}）
 {tasks_json_text}
 
 {dependency_prompt_base}

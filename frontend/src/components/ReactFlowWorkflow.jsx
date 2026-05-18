@@ -795,7 +795,6 @@ function relatedNodeIdsForNode(node, edges) {
   if (!node?.id) return new Set();
   const ids = new Set([String(node.id)]);
   edges.forEach((edge) => {
-    if (edge.source === node.id) ids.add(String(edge.target));
     if (edge.target === node.id) ids.add(String(edge.source));
   });
   return ids;
@@ -807,7 +806,7 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
   const nodeById = new Map(baseNodes.map((node) => [String(node.id), node]));
   const activeEdgeIds = new Set(
     baseEdges
-      .filter((edge) => hasFocus && (edge.source === focusNode.id || edge.target === focusNode.id))
+      .filter((edge) => hasFocus && edge.target === focusNode.id)
       .map((edge) => edge.id)
   );
 

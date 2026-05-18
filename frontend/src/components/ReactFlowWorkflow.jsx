@@ -149,6 +149,12 @@ function nodeBox(node, fallbackX, fallbackY) {
   };
 }
 
+function stableHash(value) {
+  return String(value)
+    .split('')
+    .reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0);
+}
+
 function WorkflowDependencyEdge({
   id,
   source,
@@ -185,20 +191,28 @@ function WorkflowDependencyEdge({
   const isVertical =
     Math.abs(targetBox.centerY - sourceBox.centerY) >
     Math.abs(targetBox.centerX - sourceBox.centerX);
-  const sourcePosition = isVertical ? Position.Left : Position.Right;
-  const targetPosition = Position.Left;
   const edgeSourceX = isVertical ? sourceBox.left : sourceBox.left + sourceBox.width;
   const edgeSourceY = sourceBox.centerY;
   const edgeTargetX = targetBox.left;
   const edgeTargetY = targetBox.centerY;
-  const [path, labelX, labelY] = getBezierPath({
-    sourceX: edgeSourceX,
-    sourceY: edgeSourceY,
-    sourcePosition,
-    targetX: edgeTargetX,
-    targetY: edgeTargetY,
-    targetPosition,
-  });
+  const edgeHash = Math.abs(stableHash(id));
+  const verticalLaneOffset = 30 + (edgeHash % 5) * 12;
+  const verticalLabelOffset = ((Math.floor(edgeHash / 5) % 5) - 2) * 7;
+  const bendX = Math.min(edgeSourceX, edgeTargetX) - verticalLaneOffset;
+  const [path, labelX, labelY] = isVertical
+    ? [
+        `M ${edgeSourceX},${edgeSourceY} C ${bendX},${edgeSourceY} ${bendX},${edgeTargetY} ${edgeTargetX},${edgeTargetY}`,
+        bendX + 12,
+        (edgeSourceY + edgeTargetY) / 2 + verticalLabelOffset,
+      ]
+    : getBezierPath({
+        sourceX: edgeSourceX,
+        sourceY: edgeSourceY,
+        sourcePosition: Position.Right,
+        targetX: edgeTargetX,
+        targetY: edgeTargetY,
+        targetPosition: Position.Left,
+      });
 
   return (
     <BaseEdge

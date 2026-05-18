@@ -4,6 +4,28 @@
 
 ![システム概要](image/Overview.png)
 
+## 構成図
+
+```mermaid
+graph LR
+  user["利用者"] --> frontend["React Vite フロントエンド"]
+  frontend --> api["FastAPI バックエンド"]
+  api --> auth["Cognito または API キー認証"]
+  api --> uploadStore["S3 PDF 保存"]
+  api --> flowTable["DynamoDB フローチャート保存"]
+  api --> jobTable["DynamoDB 抽出ジョブ管理"]
+  api --> queue["SQS 抽出キュー"]
+  queue --> worker["Lambda ワーカー"]
+  worker --> uploadStore
+  worker --> openai["OpenAI Responses と Batch"]
+  worker --> resultStore["S3 抽出結果保存"]
+  worker --> jobTable
+  frontend --> diagnose["MECE 診断ビュー"]
+  diagnose --> api
+  frontend --> visualize["React Flow 可視化"]
+  resultStore --> api
+```
+
 ## 概要
 PDF資料から防災計画のワークフローを抽出し、タスク間の依存関係を可視化・分析するシステムです。
 抽出結果は JSON v2 として、原子的な詳細タスク、依存関係、分類・正規化情報、品質診断結果を保持します。

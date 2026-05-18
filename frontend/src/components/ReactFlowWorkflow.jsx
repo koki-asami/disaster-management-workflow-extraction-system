@@ -28,6 +28,7 @@ const nodeWidth = 220;
 const nodeHeight = 62;
 const dependencyEdgeType = 'default';
 const unknownDepartmentLabel = '担当部署不明';
+const inactiveEdgeColor = '#94a3b8';
 const stableEdgeLabelStyle = {
   fill: '#475569',
   fontSize: 12,
@@ -114,9 +115,16 @@ function nodeStyle(kind, color = palette[0], highlighted = false) {
   };
 }
 
-function edgeStyle(active = false) {
+function edgeMarker(color = inactiveEdgeColor) {
   return {
-    stroke: active ? '#334155' : '#94a3b8',
+    type: MarkerType.ArrowClosed,
+    color,
+  };
+}
+
+function edgeStyle(active = false, activeColor = '#334155') {
+  return {
+    stroke: active ? activeColor : inactiveEdgeColor,
     strokeWidth: active ? 3 : 1.5,
     opacity: active ? 1 : 0.58,
   };
@@ -485,7 +493,7 @@ export function graphDataToGroupedFlow(graphData) {
       target: rollup.target,
       type: dependencyEdgeType,
       label: `${rollup.dependencies.length}件${typeSummary ? ` ${typeSummary}` : ''}`,
-      markerEnd: { type: MarkerType.ArrowClosed },
+      markerEnd: edgeMarker(),
       style: edgeStyle(false),
       ...stableEdgeLabelProps,
       data: { kind: 'group-edge', rollup, deps: rollup.dependencies.map((item) => item.dep) },
@@ -532,7 +540,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
       target: endpoints.to,
       type: dependencyEdgeType,
       label: dependencyTypeLabels[dep.dependency_type] || '',
-      markerEnd: { type: MarkerType.ArrowClosed },
+      markerEnd: edgeMarker(),
       style: edgeStyle(false),
       ...stableEdgeLabelProps,
       data: { kind: 'task-edge', dep },
@@ -615,7 +623,7 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
       source: endpoints.from,
       target: endpoints.to,
       type: dependencyEdgeType,
-      markerEnd: { type: MarkerType.ArrowClosed },
+      markerEnd: edgeMarker(),
       style: edgeStyle(false),
       data: { kind: 'task-edge', dep },
   }));
@@ -676,6 +684,7 @@ function relatedNodeIdsForNode(node, edges) {
 function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds = new Set()) {
   const relatedIds = relatedNodeIdsForNode(focusNode, baseEdges);
   const hasFocus = !!focusNode?.id && relatedIds.size > 0;
+  const nodeById = new Map(baseNodes.map((node) => [String(node.id), node]));
   const activeEdgeIds = new Set(
     baseEdges
       .filter((edge) => hasFocus && (edge.source === focusNode.id || edge.target === focusNode.id))
@@ -699,9 +708,12 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
 
   const edges = baseEdges.map((edge) => {
     const active = activeEdgeIds.has(edge.id);
+    const sourceNode = nodeById.get(String(edge.source));
+    const activeColor = sourceNode?.data?.color?.border || '#334155';
     return {
       ...edge,
-      style: edgeStyle(active),
+      style: edgeStyle(active, activeColor),
+      markerEnd: edgeMarker(active ? activeColor : inactiveEdgeColor),
     };
   });
 

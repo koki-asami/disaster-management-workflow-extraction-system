@@ -12,7 +12,7 @@ import ReactFlow, {
   useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { diagnoseWorkflow } from '../config';
+import { diagnoseWorkflow } from '../config.js';
 import {
   buildWorkflowOverview,
   cleanTaskName,
@@ -22,7 +22,7 @@ import {
   normalizeWorkflowData,
   truncateText,
   workflowTaxonomies,
-} from '../utils/workflowAggregation';
+} from '../utils/workflowAggregation.js';
 
 const nodeWidth = 220;
 const nodeHeight = 62;

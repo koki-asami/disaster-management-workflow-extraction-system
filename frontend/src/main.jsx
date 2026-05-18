@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './index.css';
-import App from './App';
+import App from './App.jsx';
 
 /** Catches render errors so the tab is not silently blank (check Console → All levels). */
 class RootErrorBoundary extends React.Component {

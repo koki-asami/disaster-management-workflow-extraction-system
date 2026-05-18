@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import './SaveFlowchartModal.css';
-import { saveFlowchart } from '../config';
+import { saveFlowchart } from '../config.js';
 
 const SaveFlowchartModal = ({ show, handleClose, chartCode, onSave, fileId, graphData }) => {
     const [locationType, setLocationType] = useState('prefecture');

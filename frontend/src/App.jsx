@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import UploadManager from './components/UploadManager';
-import ChartDisplay from './components/ChartDisplay';
-import ChatUI from './components/ChatUI';
-import SavedFlowcharts from './components/SavedFlowcharts';
+import UploadManager from './components/UploadManager.jsx';
+import ChartDisplay from './components/ChartDisplay.jsx';
+import ChatUI from './components/ChatUI.jsx';
+import SavedFlowcharts from './components/SavedFlowcharts.jsx';
 import {
   checkBackendHealth,
   listFlowcharts,
@@ -18,10 +18,10 @@ import {
   isAuthRequired,
   isCognitoConfigured,
   DEV_TOKEN_INPUT_ENABLED,
-} from './config';
+} from './config.js';
 import logo from './assets/icons8-ai-96.png';
 import './App.css';
-import SaveFlowchartModal from './components/SaveFlowchartModal';
+import SaveFlowchartModal from './components/SaveFlowchartModal.jsx';
 
 // ファビコンを設定する関数
 const setFavicon = (url) => {

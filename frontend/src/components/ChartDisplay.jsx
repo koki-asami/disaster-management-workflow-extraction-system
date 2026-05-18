@@ -1,8 +1,8 @@
 import React, { useRef, useState } from 'react';
 import html2canvas from 'html2canvas';
 import './ChartDisplay.css';
-import SaveFlowchartModal from './SaveFlowchartModal';
-import ReactFlowWorkflow from './ReactFlowWorkflow';
+import SaveFlowchartModal from './SaveFlowchartModal.jsx';
+import ReactFlowWorkflow from './ReactFlowWorkflow.jsx';
 
 function ChartDisplay({ chartCode, graphData, onRetryRequest, onCodeUpdate, savedChart, fileId}) {
   const chartRef = useRef(null);

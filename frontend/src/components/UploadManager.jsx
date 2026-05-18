@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { presignUpload, completeUpload, fetchUploads, deleteUpload } from '../config';
+import { presignUpload, completeUpload, fetchUploads, deleteUpload } from '../config.js';
 import './UploadPdf.css';
 
 function bytesToMB(bytes) {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, Button, Alert, Spinner } from 'react-bootstrap';
-import { deleteFlowchart } from '../config';
+import { deleteFlowchart } from '../config.js';
 
 const DeleteConfirmModal = ({ show, handleClose, flowchart, onDeleteSuccess }) => {
   const [isDeleting, setIsDeleting] = useState(false);

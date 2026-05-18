@@ -3,7 +3,7 @@ import {
   buildWorkflowOverview,
   laneInfoForTask,
   normalizeWorkflowData,
-} from './workflowAggregation';
+} from './workflowAggregation.js';
 
 const graphData = {
   schema_version: '2.0',

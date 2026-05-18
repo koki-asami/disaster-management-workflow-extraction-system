@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, InputGroup } from 'react-bootstrap';
-import { listFlowcharts, getFlowchart } from '../config';
-import DeleteConfirmModal from './DeleteConfirmModal';
+import { listFlowcharts, getFlowchart } from '../config.js';
+import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 import './SavedFlowcharts.css';
 
 const SavedFlowcharts = ({ onSelectFlowchart }) => {

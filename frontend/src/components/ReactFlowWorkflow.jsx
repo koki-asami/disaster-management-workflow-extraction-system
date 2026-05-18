@@ -188,34 +188,25 @@ function WorkflowDependencyEdge({
   );
   const sourceBox = nodeBox(sourceNode, sourceX, sourceY);
   const targetBox = nodeBox(targetNode, targetX, targetY);
-  const isVertical =
-    Math.abs(targetBox.centerY - sourceBox.centerY) >
-    Math.abs(targetBox.centerX - sourceBox.centerX);
-  const edgeSourceX = isVertical ? sourceBox.centerX : sourceBox.left + sourceBox.width;
-  const edgeSourceY = isVertical ? sourceBox.top + sourceBox.height : sourceBox.centerY;
-  const edgeTargetX = isVertical ? targetBox.centerX : targetBox.left;
-  const edgeTargetY = isVertical ? targetBox.top : targetBox.centerY;
+  const deltaX = targetBox.centerX - sourceBox.centerX;
+  const deltaY = targetBox.centerY - sourceBox.centerY;
+  const isSameVerticalLine = Math.abs(deltaX) <= nodeWidth * 0.38 && Math.abs(deltaY) > nodeHeight;
   const edgeHash = Math.abs(stableHash(id));
-  const verticalLaneOffset = 36 + (edgeHash % 5) * 14;
-  const verticalLabelOffset = ((Math.floor(edgeHash / 5) % 5) - 2) * 7;
-  const laneDirection = edgeHash % 2 === 0 ? -1 : 1;
-  const bendX = (edgeSourceX + edgeTargetX) / 2 + laneDirection * verticalLaneOffset;
-  const midY = (edgeSourceY + edgeTargetY) / 2;
-  const sourceOutY = edgeSourceY + 42;
-  const targetInY = edgeTargetY - 42;
-  const [path, labelX, labelY] = isVertical
+  const laneOffset = 34 + (edgeHash % 5) * 14;
+  const labelOffset = ((Math.floor(edgeHash / 5) % 5) - 2) * 7;
+  const [path, labelX, labelY] = isSameVerticalLine
     ? [
-        `M ${edgeSourceX},${edgeSourceY} C ${edgeSourceX},${sourceOutY} ${bendX},${sourceOutY} ${bendX},${midY} C ${bendX},${targetInY} ${edgeTargetX},${targetInY} ${edgeTargetX},${edgeTargetY}`,
-        bendX,
-        midY + verticalLabelOffset,
+        `M ${sourceBox.left + sourceBox.width},${sourceBox.centerY} C ${sourceBox.left + sourceBox.width + laneOffset},${sourceBox.centerY} ${targetBox.left + targetBox.width + laneOffset},${targetBox.centerY} ${targetBox.left},${targetBox.centerY}`,
+        Math.max(sourceBox.left + sourceBox.width, targetBox.left + targetBox.width) + laneOffset,
+        (sourceBox.centerY + targetBox.centerY) / 2 + labelOffset,
       ]
     : getBezierPath({
-        sourceX: edgeSourceX,
-        sourceY: edgeSourceY,
-        sourcePosition: Position.Right,
-        targetX: edgeTargetX,
-        targetY: edgeTargetY,
-        targetPosition: Position.Left,
+        sourceX: sourceBox.centerX,
+        sourceY: sourceBox.top + sourceBox.height,
+        sourcePosition: Position.Bottom,
+        targetX: targetBox.centerX,
+        targetY: targetBox.top,
+        targetPosition: Position.Top,
       });
 
   return (

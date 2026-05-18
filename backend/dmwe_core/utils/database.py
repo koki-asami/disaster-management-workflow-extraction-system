@@ -16,8 +16,17 @@ from dmwe_core.utils.s3_storage import (
 
 logger = get_logger(__name__)
 
-# Initialize DynamoDB client
-dynamodb = boto3.resource("dynamodb")
+# DynamoDB resource is created lazily so module import does not require AWS
+# credentials/region (e.g. unit tests that do not touch DynamoDB).
+_dynamodb_resource = None
+
+
+def _get_dynamodb():
+    global _dynamodb_resource
+    if _dynamodb_resource is None:
+        _dynamodb_resource = boto3.resource("dynamodb")
+    return _dynamodb_resource
+
 
 # Main flowchart table
 TABLE_NAME = os.environ.get("FLOWCHART_TABLE_NAME", "flowcharts")
@@ -37,6 +46,7 @@ def _get_or_create_table(
     global_secondary_indexes=None,
 ):
     """Generic helper to get or create a DynamoDB table."""
+    dynamodb = _get_dynamodb()
     try:
         table = dynamodb.Table(table_name)
         # Accessing table_status forces a DescribeTable

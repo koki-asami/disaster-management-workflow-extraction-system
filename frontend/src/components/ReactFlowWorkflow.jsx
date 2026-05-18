@@ -191,19 +191,23 @@ function WorkflowDependencyEdge({
   const isVertical =
     Math.abs(targetBox.centerY - sourceBox.centerY) >
     Math.abs(targetBox.centerX - sourceBox.centerX);
-  const edgeSourceX = isVertical ? sourceBox.left : sourceBox.left + sourceBox.width;
-  const edgeSourceY = sourceBox.centerY;
-  const edgeTargetX = targetBox.left;
-  const edgeTargetY = targetBox.centerY;
+  const edgeSourceX = isVertical ? sourceBox.centerX : sourceBox.left + sourceBox.width;
+  const edgeSourceY = isVertical ? sourceBox.top + sourceBox.height : sourceBox.centerY;
+  const edgeTargetX = isVertical ? targetBox.centerX : targetBox.left;
+  const edgeTargetY = isVertical ? targetBox.top : targetBox.centerY;
   const edgeHash = Math.abs(stableHash(id));
-  const verticalLaneOffset = 30 + (edgeHash % 5) * 12;
+  const verticalLaneOffset = 36 + (edgeHash % 5) * 14;
   const verticalLabelOffset = ((Math.floor(edgeHash / 5) % 5) - 2) * 7;
-  const bendX = Math.min(edgeSourceX, edgeTargetX) - verticalLaneOffset;
+  const laneDirection = edgeHash % 2 === 0 ? -1 : 1;
+  const bendX = (edgeSourceX + edgeTargetX) / 2 + laneDirection * verticalLaneOffset;
+  const midY = (edgeSourceY + edgeTargetY) / 2;
+  const sourceOutY = edgeSourceY + 42;
+  const targetInY = edgeTargetY - 42;
   const [path, labelX, labelY] = isVertical
     ? [
-        `M ${edgeSourceX},${edgeSourceY} C ${bendX},${edgeSourceY} ${bendX},${edgeTargetY} ${edgeTargetX},${edgeTargetY}`,
-        bendX + 12,
-        (edgeSourceY + edgeTargetY) / 2 + verticalLabelOffset,
+        `M ${edgeSourceX},${edgeSourceY} C ${edgeSourceX},${sourceOutY} ${bendX},${sourceOutY} ${bendX},${midY} C ${bendX},${targetInY} ${edgeTargetX},${targetInY} ${edgeTargetX},${edgeTargetY}`,
+        bendX,
+        midY + verticalLabelOffset,
       ]
     : getBezierPath({
         sourceX: edgeSourceX,

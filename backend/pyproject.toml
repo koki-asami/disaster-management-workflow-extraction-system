@@ -5,7 +5,10 @@ description = "Backend for Disaster Management Workflow Extraction System"
 readme = "../README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "chalice==1.29.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "PyJWT[crypto]>=2.8.0",
     "openai==1.65.5",
     "PyMuPDF",
     "PyPDF2==3.0.1",
@@ -16,5 +19,8 @@ dependencies = [
     "boto3==1.34.0",
     "standard-distutils",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 

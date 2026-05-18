@@ -1,6 +1,7 @@
-# Deploy backend (Chalice) and frontend (React) to AWS.
-# - push to main -> deploy to dev
-# - push tag v* -> deploy to prod
+# Deploy backend container (ECR) and frontend (S3 + CloudFront).
+# Configure repository variables:
+#   BACKEND_API_URL_DEV / BACKEND_API_URL_PROD — public origin for the API (no trailing slash), e.g. https://api.example.com
+# push to main -> dev; push tag v* -> prod
 
 name: Deploy to AWS
 
@@ -15,16 +16,16 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ap-northeast-1
+  AWS_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
   backend:
-    name: Deploy backend (Chalice)
+    name: Deploy backend (ECR)
     runs-on: ubuntu-latest
     outputs:
-      api_url: ${{ steps.deploy.outputs.api_url }}
+      api_url: ${{ steps.meta.outputs.api_url }}
     env:
-      CHALICE_STAGE: ${{ github.ref == 'refs/heads/main' && 'dev' || 'prod' }}
+      STAGE: ${{ github.ref == 'refs/heads/main' && 'dev' || 'prod' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,49 +34,37 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install backend dependencies
+      - name: Resolve ECR registry and API URL
+        id: meta
         run: |
-          cd backend
-          pip install -r requirements.txt
-          pip install chalice
-
-      - name: Inject OpenAI API key into Chalice config
-        run: |
-          cd backend
-          if [ -n "$OPENAI_API_KEY" ]; then
-            sed -i.bak "s|YOUR_OPENAI_API_KEY_HERE|$OPENAI_API_KEY|g" .chalice/config.json
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "registry=${ACCOUNT}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+          echo "repo=dmwe-api-${{ env.STAGE }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "api_url=${{ vars.BACKEND_API_URL_DEV }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "api_url=${{ vars.BACKEND_API_URL_PROD }}" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: Deploy Chalice
-        id: deploy
-        run: |
-          cd backend
-          set -e
-          chalice deploy --stage "$CHALICE_STAGE"
-          url=$(chalice url --stage "$CHALICE_STAGE" | tr -d '\r' | sed 's|/$||')
-          if [ -z "$url" ]; then
-            echo "::error::Could not get Rest API URL from chalice deploy output"
-            exit 1
-          fi
-          echo "api_url=${url}" >> $GITHUB_OUTPUT
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
         env:
-          CHALICE_STAGE: ${{ env.CHALICE_STAGE }}
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+          REPO: ${{ steps.meta.outputs.repo }}
+        run: |
+          docker build -t "$REGISTRY/$REPO:${{ github.sha }}" -t "$REGISTRY/$REPO:latest" backend
+          docker push "$REGISTRY/$REPO:${{ github.sha }}"
+          docker push "$REGISTRY/$REPO:latest"
 
   frontend:
     name: Deploy frontend (S3 + CloudFront)
     needs: backend
     runs-on: ubuntu-latest
     env:
-      REACT_APP_API_ENDPOINT: ${{ needs.backend.outputs.api_url }}
       FRONTEND_BUCKET: ${{ github.ref == 'refs/heads/main' && 'dmwe-frontend-dev' || 'dmwe-frontend-prod' }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ github.ref == 'refs/heads/main' && vars.CLOUDFRONT_DISTRIBUTION_ID_DEV || vars.CLOUDFRONT_DISTRIBUTION_ID_PROD }}
     steps:
@@ -95,14 +84,14 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Ensure API endpoint is set
+      - name: Ensure API origin is set
         run: |
-          if [ -z "$REACT_APP_API_ENDPOINT" ]; then
-            echo "::error::REACT_APP_API_ENDPOINT is empty (backend may not have output api_url)"
+          if [ -z "$VITE_API_ORIGIN" ]; then
+            echo "::error::VITE_API_ORIGIN is empty — set BACKEND_API_URL_DEV / BACKEND_API_URL_PROD repository variables"
             exit 1
           fi
         env:
-          REACT_APP_API_ENDPOINT: ${{ needs.backend.outputs.api_url }}
+          VITE_API_ORIGIN: ${{ needs.backend.outputs.api_url }}
 
       - name: Install frontend dependencies
         run: npm ci
@@ -112,12 +101,17 @@ jobs:
         run: npm run build
         working-directory: frontend
         env:
-          REACT_APP_API_ENDPOINT: ${{ env.REACT_APP_API_ENDPOINT }}
+          VITE_API_ORIGIN: ${{ needs.backend.outputs.api_url }}
+          VITE_API_PREFIX: /api/v1
+          VITE_COGNITO_DOMAIN: ${{ github.ref == 'refs/heads/main' && vars.VITE_COGNITO_DOMAIN_DEV || vars.VITE_COGNITO_DOMAIN_PROD }}
+          VITE_COGNITO_APP_CLIENT_ID: ${{ github.ref == 'refs/heads/main' && vars.VITE_COGNITO_APP_CLIENT_ID_DEV || vars.VITE_COGNITO_APP_CLIENT_ID_PROD }}
+          VITE_COGNITO_REDIRECT_URI: ${{ github.ref == 'refs/heads/main' && vars.VITE_COGNITO_REDIRECT_URI_DEV || vars.VITE_COGNITO_REDIRECT_URI_PROD }}
+          VITE_COGNITO_LOGOUT_URI: ${{ github.ref == 'refs/heads/main' && vars.VITE_COGNITO_LOGOUT_URI_DEV || vars.VITE_COGNITO_LOGOUT_URI_PROD }}
           CI: "false"
 
       - name: Sync to S3
         run: |
-          aws s3 sync frontend/build s3://$FRONTEND_BUCKET --delete
+          aws s3 sync frontend/dist "s3://$FRONTEND_BUCKET" --delete
         env:
           FRONTEND_BUCKET: ${{ env.FRONTEND_BUCKET }}
 

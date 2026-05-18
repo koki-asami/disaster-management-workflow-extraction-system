@@ -696,13 +696,21 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
     const color = node.data?.color || palette[0];
     const diagnosticHit = diagnosticsTaskIds.has(String(node.id));
     let state = diagnosticHit ? true : false;
+    let zIndex = diagnosticHit ? 12 : node.zIndex;
     if (hasFocus) {
       state = relatedIds.has(String(node.id)) ? true : 'muted';
+      if (String(node.id) === String(focusNode.id)) {
+        zIndex = 24;
+      } else if (state === true) {
+        zIndex = 18;
+      } else {
+        zIndex = node.zIndex;
+      }
     }
     return {
       ...node,
       style: nodeStyle(node.data?.kind === 'group' ? 'group' : 'task', color, state),
-      zIndex: state === true ? 4 : node.zIndex,
+      zIndex,
     };
   });
 
@@ -714,6 +722,7 @@ function applyFocusStyling(baseNodes, baseEdges, focusNode, diagnosticsTaskIds =
       ...edge,
       style: edgeStyle(active, activeColor),
       markerEnd: edgeMarker(active ? activeColor : inactiveEdgeColor),
+      zIndex: active ? 16 : edge.zIndex,
     };
   });
 

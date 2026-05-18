@@ -26,6 +26,7 @@ import {
 
 const nodeWidth = 220;
 const nodeHeight = 62;
+const dependencyEdgeType = 'default';
 const unknownDepartmentLabel = '担当部署不明';
 
 const palette = [
@@ -328,6 +329,94 @@ function createDepartmentLaneNodes(lanes, width, prefix) {
   }));
 }
 
+function createWorkstreamAreaNodes(nodes, graphData, options = {}) {
+  const workflow = normalizeWorkflowData(graphData);
+  const workstreamLabels = new Map(workflow.workstreams.map((item) => [item.id, item.label]));
+  const grouped = new Map();
+  nodes.forEach((node) => {
+    const workstream = node.data?.task?.__workstream || node.data?.task?.workstream || 'other';
+    if (!grouped.has(workstream)) grouped.set(workstream, []);
+    grouped.get(workstream).push(node);
+  });
+
+  const padX = options.padX ?? 24;
+  const padY = options.padY ?? 22;
+  const headerPad = options.headerPad ?? 36;
+  const prefix = options.prefix ?? 'workstream-area';
+
+  return Array.from(grouped.entries()).map(([workstream, groupNodes], index) => {
+    const color = colorForIndex(workflow.workstreams.findIndex((item) => item.id === workstream));
+    const minX = Math.min(...groupNodes.map((node) => node.position.x));
+    const minY = Math.min(...groupNodes.map((node) => node.position.y));
+    const maxX = Math.max(...groupNodes.map((node) => node.position.x + nodeWidth));
+    const maxY = Math.max(...groupNodes.map((node) => node.position.y + nodeHeight));
+    return {
+      id: `${prefix}:${workstream}:${index}`,
+      type: 'default',
+      data: {
+        kind: 'workstream-area',
+        label: workstreamLabels.get(workstream) || workstream,
+      },
+      position: {
+        x: minX - padX,
+        y: minY - headerPad,
+      },
+      draggable: false,
+      selectable: false,
+      connectable: false,
+      focusable: false,
+      zIndex: -3,
+      style: {
+        width: maxX - minX + padX * 2,
+        height: maxY - minY + headerPad + padY,
+        border: `1px dashed ${color.border}`,
+        background: color.area,
+        color: color.text,
+        borderRadius: 8,
+        padding: '9px 11px',
+        fontSize: 12,
+        fontWeight: 800,
+        pointerEvents: 'none',
+        boxSizing: 'border-box',
+      },
+    };
+  });
+}
+
+function createPhaseAreaNode({ selectedGroup, bounds, color, graphData, groupKey }) {
+  const phaseLabel =
+    workflowTaxonomies(graphData).phases.find((phase) => phase.id === selectedGroup?.phase)?.label ||
+    selectedGroup?.phaseLabel ||
+    'フェーズ';
+  return {
+    id: `phase-area:${groupKey}`,
+    type: 'default',
+    data: { kind: 'phase-area', label: phaseLabel },
+    position: {
+      x: bounds.minX - 38,
+      y: bounds.minY - 86,
+    },
+    draggable: false,
+    selectable: false,
+    connectable: false,
+    focusable: false,
+    zIndex: -4,
+    style: {
+      width: bounds.maxX - bounds.minX + 76,
+      height: bounds.maxY - bounds.minY + 126,
+      border: '1px solid rgba(100, 116, 139, 0.36)',
+      background: 'rgba(248, 250, 252, 0.72)',
+      color: '#334155',
+      borderRadius: 10,
+      padding: '12px 14px',
+      fontSize: 13,
+      fontWeight: 900,
+      pointerEvents: 'none',
+      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.75)',
+    },
+  };
+}
+
 function taskLabel(task) {
   return truncateText(cleanTaskName(task?.name) || task?.id || 'タスク', 28);
 }
@@ -378,7 +467,7 @@ export function graphDataToGroupedFlow(graphData) {
       id: rollup.id,
       source: rollup.source,
       target: rollup.target,
-      type: 'smoothstep',
+      type: dependencyEdgeType,
       label: `${rollup.dependencies.length}件${typeSummary ? ` ${typeSummary}` : ''}`,
       markerEnd: { type: MarkerType.ArrowClosed },
       style: edgeStyle(false),
@@ -425,7 +514,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
       id: `e-${index}-${endpoints.from}-${endpoints.to}`,
       source: endpoints.from,
       target: endpoints.to,
-      type: 'smoothstep',
+      type: dependencyEdgeType,
       label: dependencyTypeLabels[dep.dependency_type] || '',
       markerEnd: { type: MarkerType.ArrowClosed },
       style: edgeStyle(false),
@@ -441,11 +530,19 @@ export function graphDataToDetailFlow(graphData, groupKey) {
 
   const maxX = Math.max(...laidTaskNodes.map((node) => node.position.x + nodeWidth));
   const maxY = Math.max(...layout.lanes.map((lane) => lane.y + lane.height));
+  const bounds = { minX: 0, minY: 0, maxX: maxX + 32, maxY: maxY + 18 };
+  const phaseAreaNode = createPhaseAreaNode({
+    selectedGroup,
+    bounds,
+    color,
+    graphData,
+    groupKey: selectedGroup?.key || groupKey,
+  });
   const backgroundNode = {
     id: `topic-area:${selectedGroup?.key || groupKey}`,
     type: 'default',
     data: { kind: 'topic-area', label: selectedGroup?.workstreamLabel || '詳細' },
-    position: { x: -16, y: -46 },
+    position: { x: -16, y: -50 },
     draggable: false,
     selectable: false,
     connectable: false,
@@ -453,7 +550,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
     zIndex: -2,
     style: {
       width: maxX + 32,
-      height: maxY + 64,
+      height: maxY + 72,
       border: `2px dashed ${color.border}`,
       background: color.area,
       color: color.text,
@@ -467,7 +564,7 @@ export function graphDataToDetailFlow(graphData, groupKey) {
   const laneNodes = createDepartmentLaneNodes(layout.lanes, maxX + 32, `detail-lane:${groupKey}`);
 
   return {
-    nodes: [backgroundNode, ...laneNodes, ...laidTaskNodes],
+    nodes: [phaseAreaNode, backgroundNode, ...laneNodes, ...laidTaskNodes],
     edges,
     selectedGroup,
     focusNodeIds: laidTaskNodes.map((node) => node.id),
@@ -500,14 +597,22 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
       id: `diag-e-${index}-${endpoints.from}-${endpoints.to}`,
       source: endpoints.from,
       target: endpoints.to,
-      type: 'smoothstep',
+      type: dependencyEdgeType,
       markerEnd: { type: MarkerType.ArrowClosed },
       style: edgeStyle(false),
       data: { kind: 'task-edge', dep },
-    }));
+  }));
 
   if (nodes.length > 80) {
-    return { nodes: layoutWithDagre(nodes, edges), edges, focusNodeIds: nodes.map((node) => node.id) };
+    const laidNodes = layoutWithDagre(nodes, edges);
+    const workstreamAreas = createWorkstreamAreaNodes(laidNodes, graphData, {
+      prefix: 'diagnostics-workstream-area',
+    });
+    return {
+      nodes: [...workstreamAreas, ...laidNodes],
+      edges,
+      focusNodeIds: laidNodes.map((node) => node.id),
+    };
   }
 
   const layout = layoutByTimelineAndDepartment(nodes, edges, {
@@ -517,9 +622,15 @@ export function graphDataToDiagnosticsFlow(graphData, highlightedTaskIds = new S
   });
   if (layout.nodes.length === 0) return { nodes: [], edges, focusNodeIds: [] };
   const maxX = Math.max(...layout.nodes.map((node) => node.position.x + nodeWidth));
+  const workstreamAreas = createWorkstreamAreaNodes(layout.nodes, graphData, {
+    prefix: 'diagnostics-workstream-area',
+    padX: 18,
+    padY: 18,
+    headerPad: 34,
+  });
   const laneNodes = createDepartmentLaneNodes(layout.lanes, maxX + 32, 'diagnostics-lane');
   return {
-    nodes: [...laneNodes, ...layout.nodes],
+    nodes: [...workstreamAreas, ...laneNodes, ...layout.nodes],
     edges,
     focusNodeIds: layout.nodes.map((node) => node.id),
   };

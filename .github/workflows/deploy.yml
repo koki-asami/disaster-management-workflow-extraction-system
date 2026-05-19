@@ -56,9 +56,27 @@ jobs:
           REGISTRY: ${{ steps.meta.outputs.registry }}
           REPO: ${{ steps.meta.outputs.repo }}
         run: |
-          docker build -t "$REGISTRY/$REPO:${{ github.sha }}" -t "$REGISTRY/$REPO:latest" backend
+          docker build --platform linux/amd64 -t "$REGISTRY/$REPO:${{ github.sha }}" -t "$REGISTRY/$REPO:latest" backend
           docker push "$REGISTRY/$REPO:${{ github.sha }}"
           docker push "$REGISTRY/$REPO:latest"
+
+      - name: Render task definition with image and secret
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: backend/ecs-taskdef.json
+          container-name: api
+          image: ${{ steps.meta.outputs.registry }}/${{ steps.meta.outputs.repo }}:${{ github.sha }}
+          environment-variables: |
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+
+      - name: Deploy ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: dmwe-${{ env.STAGE }}
+          service: dmwe-api-${{ env.STAGE }}
+          wait-for-service-stability: true
 
   frontend:
     name: Deploy frontend (S3 + CloudFront)

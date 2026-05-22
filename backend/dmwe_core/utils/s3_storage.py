@@ -14,6 +14,23 @@ logger = get_logger(__name__)
 BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'disaster-management-pdfs')
 AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-northeast-1"
 
+# S3 prefix for saved flowchart blobs (large chart_code / graph_data offloads).
+# Env unset → saved-flowcharts/v2/<location>/... （従来の <location>/charts|graph_data とパスを分離）。
+# FLOWCHART_S3_ROOT=（空で明示）→ 従来どおり <location>/charts|graph_data のみ。
+if "FLOWCHART_S3_ROOT" in os.environ:
+    FLOWCHART_S3_ROOT = os.environ.get("FLOWCHART_S3_ROOT", "").strip().strip("/")
+else:
+    FLOWCHART_S3_ROOT = "saved-flowcharts/v2"
+
+
+def _flowchart_location_root(location_name: str) -> str:
+    """Build S3 path segment before charts/graph_data for saved flowcharts."""
+    loc = (location_name or "").strip().strip("/")
+    if FLOWCHART_S3_ROOT:
+        return f"{FLOWCHART_S3_ROOT}/{loc}"
+    return loc
+
+
 # S3 browser uploads need a regional SigV4 URL. The global endpoint can make CORS
 # preflight fail for buckets outside us-east-1 because OPTIONS hits a redirect.
 s3 = boto3.client(
@@ -70,7 +87,8 @@ def upload_chart_code(chart_code: str, location_name: str) -> str:
     try:
         create_bucket_if_not_exists()
 
-        object_key = f"{location_name}/charts/{uuid.uuid4()}.json"
+        root = _flowchart_location_root(location_name)
+        object_key = f"{root}/charts/{uuid.uuid4()}.json"
 
         s3.put_object(
             Bucket=BUCKET_NAME,
@@ -115,7 +133,8 @@ def upload_graph_data(graph_data: dict, location_name: str, chart_id: str | None
     try:
         create_bucket_if_not_exists()
         suffix = f"{chart_id}" if chart_id else str(uuid.uuid4())
-        object_key = f"{location_name}/graph_data/{suffix}.json"
+        root = _flowchart_location_root(location_name)
+        object_key = f"{root}/graph_data/{suffix}.json"
         body = json.dumps(graph_data, ensure_ascii=False)
         s3.put_object(
             Bucket=BUCKET_NAME,

@@ -13,6 +13,18 @@ s3 = boto3.client('s3')
 # Get bucket name from environment variable or use default
 BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'disaster-management-pdfs')
 
+if "FLOWCHART_S3_ROOT" in os.environ:
+    FLOWCHART_S3_ROOT = os.environ.get("FLOWCHART_S3_ROOT", "").strip().strip("/")
+else:
+    FLOWCHART_S3_ROOT = "saved-flowcharts/v2"
+
+
+def _flowchart_location_root(location_name: str) -> str:
+    loc = (location_name or "").strip().strip("/")
+    if FLOWCHART_S3_ROOT:
+        return f"{FLOWCHART_S3_ROOT}/{loc}"
+    return loc
+
 
 def create_bucket_if_not_exists():
     """Create the S3 bucket if it doesn't exist."""
@@ -60,7 +72,8 @@ def upload_chart_code(chart_code: str, location_name: str) -> str:
     try:
         create_bucket_if_not_exists()
 
-        object_key = f"{location_name}/charts/{uuid.uuid4()}.json"
+        root = _flowchart_location_root(location_name)
+        object_key = f"{root}/charts/{uuid.uuid4()}.json"
 
         s3.put_object(
             Bucket=BUCKET_NAME,
@@ -105,7 +118,8 @@ def upload_graph_data(graph_data: dict, location_name: str, chart_id: str | None
     try:
         create_bucket_if_not_exists()
         suffix = f"{chart_id}" if chart_id else str(uuid.uuid4())
-        object_key = f"{location_name}/graph_data/{suffix}.json"
+        root = _flowchart_location_root(location_name)
+        object_key = f"{root}/graph_data/{suffix}.json"
         body = json.dumps(graph_data, ensure_ascii=False)
         s3.put_object(
             Bucket=BUCKET_NAME,

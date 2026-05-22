@@ -18,6 +18,7 @@ CI/CD（GitHub Actions）および手動デプロイ時に参照する、環境�
 | `OPENAI_API_KEY` | （秘密情報） | 同上 | 本番は Secrets Manager 推奨 |
 | `FLOWCHART_TABLE_NAME` | `flowcharts_dev` | `flowcharts_prod` | DynamoDB ベース名（`_uploads` / `_jobs` が接尾辞で付く） |
 | `S3_BUCKET_NAME` | `dmwe-pdfs-dev` | `dmwe-pdfs-prod` | 未設定時はコードデフォルト |
+| `FLOWCHART_S3_ROOT` | （省略可） | 同上 | 保存済みフローチャートの肥大データを S3 に退避するときのプレフィックス。**省略時は既定 `saved-flowcharts/v2`**（`saved-flowcharts/v2/<location>/charts/` および `.../graph_data/`）。IAM でプレフィックス制限がある場合は当該パスを許可する。従来の `{location}/charts` 配置のみに戻すには `FLOWCHART_S3_ROOT=`（空文字）を明示 |
 | `EXTRACTION_QUEUE_URL` | （SQS キュー URL） | 同上 | Lambda 上の API で非同期投入する場合**必須**。ローカル uvicorn では未設定可 |
 | `EXTRACTION_MODE` | `batch` | `batch` | 非同期 worker の主経路。ローカル smoke のみ `sync` 可 |
 | `COGNITO_REGION` | `ap-northeast-1` | 同上 | Cognito JWT 検証用 |

@@ -5,7 +5,7 @@ $ uv sync  # .venv を自動作成して依存関係をインストール
 ```
 # 環境変数の設定
 
-`backend` 直下に `.env` を作成し、[docs/ENV_MAPPING.md](../docs/ENV_MAPPING.md) に沿って少なくとも `OPENAI_API_KEY` と `FLOWCHART_TABLE_NAME` を設定してください。
+`backend` 直下に `.env` を作成し、[docs/ENV_MAPPING.md](../docs/ENV_MAPPING.md) に沿って少なくとも `OPENAI_API_KEY` と `FLOWCHART_TABLE_NAME` を設定してください。保存済みフローチャートの S3 退避オブジェクトは、環境変数未指定時 **`saved-flowcharts/v2/<location_name>/charts` および `.../graph_data`** に書き込まれます（`FLOWCHART_S3_ROOT` で変更可／空で従来キーに戻す）。
 
 ```bash
 OPENAI_API_KEY=sk-...
